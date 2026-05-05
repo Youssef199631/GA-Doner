@@ -11,8 +11,8 @@ export default async function handler(req: any, res: any) {
   console.log('[NOTIFY] Received request for order:', req.body.order?.id);
   const { order, customerEmail, ownerEmail } = req.body;
   
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER } = process.env;
-  const ownerPhoneNumber = '+33749018193';
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, OWNER_PHONE_NUMBER } = process.env;
+  const ownerPhoneNumber = OWNER_PHONE_NUMBER || '+33749018193';
 
   let emailSent = false;
   let smsSent = false;

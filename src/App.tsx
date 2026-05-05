@@ -28,12 +28,12 @@ import { ShoppingBag,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeCanvas } from 'qrcode.react';
-import logo from './logo.png';
-import paypalLogo from './paypal.svg';
-import revolutLogo from './revolut.jpg';
-import weroLogo from './wero-logo.png';
-import weroQR from './wero_qr.jpeg';
-import backgroundImage from './data/background.jpeg';
+const logo = '/logo.png';
+const paypalLogo = '/paypal.svg';
+const revolutLogo = '/revolut.jpg';
+const weroLogo = '/wero-logo.png';
+const weroQR = '/wero_qr.jpeg';
+const backgroundImage = '/background.jpeg';
 
 // --- Components ---
 
