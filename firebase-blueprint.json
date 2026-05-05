@@ -1,0 +1,70 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents a customer or the restaurant owner.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "loyaltyPoints": { "type": "number", "description": "Points earned from orders" },
+        "role": { "type": "string", "enum": ["customer", "owner"] }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "MenuItem": {
+      "title": "MenuItem",
+      "description": "A dish or drink on the menu.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "price": { "type": "number" },
+        "category": { "type": "string", "enum": ["Entrées", "Plats", "Grillades", "Kebab", "Bowl", "Americain", "Pidé", "Boissons", "Bières", "Apéritifs", "Boissons chaudes", "Vin", "Desserts", "Menu enfant"] },
+        "image": { "type": "string", "format": "uri" }
+      },
+      "required": ["name", "price", "category"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A click and collect order.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "menuItemId": { "type": "string" },
+              "name": { "type": "string" },
+              "price": { "type": "number" },
+              "quantity": { "type": "number" },
+              "comment": { "type": "string", "description": "Supplements, allergies, etc." }
+            }
+          }
+        },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "validated", "ready", "completed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "pointsEarned": { "type": "number" }
+      },
+      "required": ["userId", "items", "total", "status", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and loyalty data."
+    },
+    "/menu/{itemId}": {
+      "schema": "MenuItem",
+      "description": "Restaurant menu items."
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Customer orders."
+    }
+  }
+}

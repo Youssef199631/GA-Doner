@@ -1,0 +1,111 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: users
+    // Document ID: {userId}
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required)
+    //   - displayName: string (optional)
+    //   - loyaltyPoints: number (required)
+    //   - role: string (required, 'customer' | 'owner')
+    //
+    // Collection: menu
+    // Document ID: {itemId}
+    // Fields:
+    //   - name: string (required)
+    //   - description: string (optional)
+    //   - price: number (required)
+    //   - category: string (required)
+    //   - image: string (optional)
+    //
+    // Collection: orders
+    // Document ID: {orderId}
+    // Fields:
+    //   - userId: string (required)
+    //   - items: list (required)
+    //   - total: number (required)
+    //   - status: string (required)
+    //   - createdAt: timestamp (required)
+    //   - comment: string (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      let email = request.auth.token.email;
+      return isAuthenticated() &&
+        (email == "agencevisiondigitale@gmail.com" || 
+         email == "sosdepannage54@gmail.com" || 
+         email == "contact@immo-khattabi-conseil.ma" ||
+         email == "ouazzani9633@gmail.com" ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner')
+        );
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'loyaltyPoints', 'role']) &&
+             data.uid is string &&
+             data.email is string &&
+             data.loyaltyPoints is number &&
+             data.role in ['customer', 'owner'] &&
+             data.uid.size() < 128 &&
+             data.email.size() < 256;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll(['userId', 'items', 'total', 'status', 'createdAt']) &&
+             data.userId is string &&
+             data.items is list &&
+             data.total is number &&
+             data.status in ['pending', 'validated', 'ready', 'completed', 'cancelled'] &&
+             data.createdAt is timestamp &&
+             data.userId == request.auth.uid;
+    }
+
+    function isValidMenuItem(data) {
+      return data.keys().hasAll(['name', 'price', 'category']) &&
+             data.name is string && data.name.size() < 100 &&
+             data.price is number && data.price >= 0 &&
+             data.category is string;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && isValidUser(request.resource.data) && (isOwner(userId) && request.resource.data.role == 'customer' || isAdmin());
+      allow update: if isAuthenticated() && isValidUser(request.resource.data) && (isAdmin() || (isOwner(userId) && request.resource.data.role == resource.data.role));
+    }
+
+    match /menu/{itemId} {
+      allow read: if true; // Menu is public
+      allow write: if isAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.userId || isAdmin());
+      allow create: if isAuthenticated() && isValidOrder(request.resource.data);
+      allow update: if isAuthenticated() && (isAdmin() || (request.auth.uid == resource.data.userId && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) && request.resource.data.status == 'cancelled'));
+      allow delete: if isAdmin();
+    }
+  }
+}
