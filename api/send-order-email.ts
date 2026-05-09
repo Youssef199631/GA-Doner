@@ -11,8 +11,16 @@ export default async function handler(req: any, res: any) {
   console.log('[NOTIFY] Received request for order:', req.body.order?.id);
   const { order, customerEmail, ownerEmail } = req.body;
   
-  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, OWNER_PHONE_NUMBER } = process.env;
+  const { SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER, OWNER_PHONE_NUMBER, OWNER_EMAIL } = process.env;
   const ownerPhoneNumber = OWNER_PHONE_NUMBER || '+33749018193';
+  const targetOwnerEmail = OWNER_EMAIL || SMTP_USER || 'contact@immo-khattabi-conseil.ma';
+
+  console.log('[NOTIFY] Env check:', {
+    hasSmtp: !!(SMTP_HOST && SMTP_USER && SMTP_PASS),
+    hasTwilio: !!(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_FROM_NUMBER),
+    twilioSidLength: TWILIO_ACCOUNT_SID?.length,
+    ownerPhone: ownerPhoneNumber
+  });
 
   let emailSent = false;
   let smsSent = false;
@@ -89,7 +97,7 @@ export default async function handler(req: any, res: any) {
 
       await transporter.sendMail({
         from: `"GA Döner & Grill" <${SMTP_USER}>`,
-        to: ownerEmail,
+        to: targetOwnerEmail,
         subject: `🍔 Commande #${order.id.slice(-4).toUpperCase()} - ${order.customerName}`,
         html: emailHtml,
       });
@@ -99,7 +107,7 @@ export default async function handler(req: any, res: any) {
           from: `"GA Döner & Grill" <${SMTP_USER}>`,
           to: customerEmail,
           subject: `Confirmation de commande - GA Döner & Grill`,
-          html: emailHtml.replace('Une nouvelle commande a été passée par', 'Merci pour votre commande ! Voici le récapitulatif de votre commande passée par'),
+          html: emailHtml.replace(/Nouvelle commande de/g, 'Merci pour votre commande ! Voici le récapitulatif pour'),
         });
       }
       emailSent = true;
@@ -112,7 +120,11 @@ export default async function handler(req: any, res: any) {
   // 2. Attempt SMS Notification
   if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_FROM_NUMBER) {
     try {
-      const client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+      console.log('[SMS] Initializing Twilio client with SID:', TWILIO_ACCOUNT_SID.substring(0, 5) + '...');
+      // @ts-ignore - twilio package can have import issues in some ESM setups
+      const TwilioClient = (twilio as any).default || twilio;
+      const client = typeof TwilioClient === 'function' ? TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : new (TwilioClient as any)(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+      
       const itemsShort = order.items.map((item: any) => `${item.quantity}x ${item.name.substring(0, 15)}`).join(', ');
 
       const message = `🍔 GA Doner Grill\n` +

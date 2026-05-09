@@ -334,8 +334,7 @@ export default function App() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             order: orderWithId,
-            customerEmail: user.email,
-            ownerEmail: 'contact@immo-khattabi-conseil.ma'
+            customerEmail: user.email
           })
         });
         const result = await response.json();
