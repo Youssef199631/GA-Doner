@@ -1,6 +1,9 @@
 import { Request, Response } from 'express';
 import nodemailer from 'nodemailer';
 import twilio from 'twilio';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 // This is a Vercel serverless function equivalent of the Express route
 export default async function handler(req: any, res: any) {
@@ -120,10 +123,13 @@ export default async function handler(req: any, res: any) {
   // 2. Attempt SMS Notification
   if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN && TWILIO_FROM_NUMBER) {
     try {
-      console.log('[SMS] Initializing Twilio client with SID:', TWILIO_ACCOUNT_SID.substring(0, 5) + '...');
-      // @ts-ignore - twilio package can have import issues in some ESM setups
-      const TwilioClient = (twilio as any).default || twilio;
-      const client = typeof TwilioClient === 'function' ? TwilioClient(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) : new (TwilioClient as any)(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
+      console.log('[SMS] Initializing Twilio client...');
+      
+      // Twilio v5+ ESM compatibility
+      const twilioLib = (twilio as any).default || twilio;
+      const client = typeof twilioLib === 'function' 
+        ? twilioLib(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) 
+        : new (twilioLib as any)(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
       
       const itemsShort = order.items.map((item: any) => `${item.quantity}x ${item.name.substring(0, 15)}`).join(', ');
 
@@ -133,12 +139,29 @@ export default async function handler(req: any, res: any) {
                      `💰 Total: ${order.total.toFixed(2)}€\n` +
                      `💳 ${paymentLabel} | 🕒 ${pickupLabel}`;
 
-      await client.messages.create({ body: message, from: TWILIO_FROM_NUMBER, to: ownerPhoneNumber });
+      console.log('[SMS] Sending to:', ownerPhoneNumber.substring(0, 6) + '...');
+      await client.messages.create({ 
+        body: message, 
+        from: TWILIO_FROM_NUMBER, 
+        to: ownerPhoneNumber 
+      });
+      console.log('[SMS] Success');
       smsSent = true;
     } catch (err: any) {
-      console.error('[SMS] Error:', err.message);
+      console.error('[SMS] Detailed Error:', {
+        message: err.message,
+        code: err.code,
+        status: err.status,
+        moreInfo: err.moreInfo
+      });
       errors.push(`SMS error: ${err.message}`);
     }
+  } else {
+    console.warn('[SMS] Config missing:', {
+      hasSid: !!TWILIO_ACCOUNT_SID,
+      hasToken: !!TWILIO_AUTH_TOKEN,
+      hasFrom: !!TWILIO_FROM_NUMBER
+    });
   }
 
   return res.status(200).json({
