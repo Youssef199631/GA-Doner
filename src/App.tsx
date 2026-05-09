@@ -289,59 +289,34 @@ export default function App() {
 
   const generateOrderSMS = (order: Order) => {
     if (!order.items || order.items.length === 0) {
-      return "ERREUR : Contenu de la commande vide. Veuillez contacter le restaurant.";
+      return "ERREUR : Contenu de la commande vide.";
     }
 
     const itemsList = order.items.map(item => {
-      let itemStr = `• ${item.quantity}x ${item.name}`;
+      let itemStr = `- ${item.quantity}x ${item.name}`;
       if (item.comment) itemStr += ` (${item.comment})`;
       return itemStr;
     }).join('\n');
 
     const paymentLabels = {
-      'counter': 'Espèces / Comptoir',
-      'paypal': 'Bouton Paypal',
+      'counter': 'Comptoir',
+      'paypal': 'Paypal',
       'wero': 'Wero',
       'revolut': 'Revolut'
     };
 
     const paymentLabel = paymentLabels[order.paymentMethod] || order.paymentMethod;
-    const pickupLabel = order.pickupTime === 'now' ? 'Immédiatement' : 
-                        order.pickupTime === '20min' ? 'Dans 20 minutes' : 'Dans 1 heure';
+    const pickupLabel = order.pickupTime === 'now' ? 'ASAP' : 
+                        order.pickupTime === '20min' ? '20 min' : '1h';
     
-    const customer = order.customerName || 'Client';
-
-    return `🍔 GA DÖNER GRILL 🍟\n` +
-           `-------------------\n` +
-           `👤 CLIENT : ${customer}\n` +
-           `🆔 COMMANDE : #${order.id.slice(-4).toUpperCase()}\n` +
-           `💳 PAIEMENT : ${paymentLabel}\n` +
-           `🕒 RÉCUPÉRATION : ${pickupLabel}\n\n` +
-           `🛒 PRODUITS :\n${itemsList}\n\n` +
-           `💰 TOTAL : ${order.total.toFixed(2)}€\n` +
-           `-------------------\n` +
-           `Merci de préparer ma commande !`;
-  };
-
-  const sendOrderSMS = (order: Order) => {
-    const message = generateOrderSMS(order);
-    const encodedMessage = encodeURIComponent(message);
-    const phoneNumber = '+33749018193';
-    
-    // Detect iOS to use the correct SMS body separator
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    const separator = isIOS ? '&' : '?';
-    
-    // Detect if we are in Median / GoNative
-    const isMedian = (window as any).gonative || /gonative/i.test(navigator.userAgent);
-    
-    if (isMedian) {
-      // Median / GoNative often handles standard sms: schemes if allowed in dashboard
-      window.location.href = `sms:${phoneNumber}${separator}body=${encodedMessage}`;
-    } else {
-      // Standard web way
-      window.location.href = `sms:${phoneNumber}${separator}body=${encodedMessage}`;
-    }
+    return `GA DONER GRILL\n` +
+           `Client: ${order.customerName}\n` +
+           `ID: #${order.id.slice(-4).toUpperCase()}\n` +
+           `Pay: ${paymentLabel}\n` +
+           `Retrait: ${pickupLabel}\n\n` +
+           `PRODUITS:\n${itemsList}\n\n` +
+           `TOTAL: ${order.total.toFixed(2)}€\n` +
+           `Merci !`;
   };
 
   const placeOrder = async () => {
@@ -368,11 +343,6 @@ export default function App() {
       setLastPlacedOrder(orderWithId);
       setIsPaymentConfirmed(false);
 
-      // If counter payment, send SMS immediately
-      if (paymentMethod === 'counter') {
-        sendOrderSMS(orderWithId);
-      }
-
       // Update loyalty points
       if (profile) {
         await updateDoc(doc(db, 'users', user.uid), {
@@ -380,7 +350,7 @@ export default function App() {
         });
       }
 
-      // Notification system
+      // Notification system (Server-side Twilio)
       try {
         const response = await fetch('/api/send-order-email', {
           method: 'POST',
@@ -394,10 +364,7 @@ export default function App() {
         const result = await response.json();
         console.log('[NOTIFY] Result:', result);
         
-        if (!result.smsSent && result.errors) {
-          console.error('[SMS-SERVER] Failed:', result.errors);
-          // If server-side SMS fails but it's a mobile app, the client-side SMS (already triggered) is our backup
-        } else if (result.smsSent) {
+        if (result.smsSent) {
           notify("Confirmation envoyée au restaurant !", "success");
         }
       } catch (e) {
@@ -417,8 +384,17 @@ export default function App() {
   const confirmPaymentAndNotify = () => {
     if (lastPlacedOrder) {
       setIsPaymentConfirmed(true);
-      sendOrderSMS(lastPlacedOrder);
-      notify("Notification envoyée au restaurant !");
+      notify("Paiement initié ! Le restaurant a été notifié.");
+      
+      // Still trigger the server notify if for some reason it wasn't enough on first attempt
+      fetch('/api/send-order-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          order: lastPlacedOrder,
+          customerEmail: user?.email
+        })
+      }).catch(console.error);
     }
   };
 
@@ -544,15 +520,19 @@ export default function App() {
 
   return (
     <div 
-      className="min-h-screen bg-logo-bordeaux text-white font-sans pb-24 bg-cover bg-center bg-fixed bg-no-repeat relative"
-      style={{ backgroundImage: `linear-gradient(rgba(97, 8, 7, 0.6), rgba(97, 8, 7, 0.7)), url(${backgroundImage})` }}
+      className="min-h-screen bg-logo-bordeaux text-white font-sans pb-32 bg-cover bg-center bg-fixed bg-no-repeat relative"
+      style={{ 
+        backgroundImage: `linear-gradient(rgba(97, 8, 7, 0.6), rgba(97, 8, 7, 0.7)), url(${backgroundImage})`,
+        paddingTop: 'env(safe-area-inset-top)',
+        paddingBottom: 'calc(env(safe-area-inset-bottom) + 100px)'
+      }}
     >
       <div className="relative z-10 min-h-screen flex flex-col w-full">
-        {/* Header masqué pour les utilisateurs connectés (look "App" native) */}
+        {/* Simple Points Indicator for Customers */}
         {profile?.role === 'customer' && (
-          <div className="fixed top-6 right-6 z-40">
-             <div className="bg-white/90 backdrop-blur-md px-4 py-2 rounded-full shadow-lg border border-gray-100 flex items-center gap-2 text-logo-bordeaux font-bold text-sm">
-                <Star size={16} fill="currentColor" />
+          <div className="fixed top-4 right-4 z-40">
+             <div className="bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-full shadow-lg border border-gray-100 flex items-center gap-2 text-logo-bordeaux font-bold text-xs ring-1 ring-black/5">
+                <Star size={14} fill="currentColor" />
                 <span>{profile.loyaltyPoints} pts</span>
              </div>
           </div>
@@ -680,13 +660,7 @@ export default function App() {
               exit={{ opacity: 0, y: 20 }}
               className="bg-white rounded-[2rem] p-4 sm:p-8 shadow-2xl border border-gray-100 max-h-[92vh] sm:max-h-[85vh] flex flex-col w-full max-w-3xl mx-auto"
             >
-              <div className="flex items-center justify-between mb-4 sm:mb-8 shrink-0">
-                <div className="flex items-center gap-3 sm:gap-4 text-logo-text">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-logo-cream/30 rounded-2xl flex items-center justify-center text-logo-bordeaux">
-                    <ShoppingBag size={24} className="sm:w-7 sm:h-7" />
-                  </div>
-                  <h2 className="text-xl sm:text-3xl font-black uppercase tracking-tighter">Mon Panier</h2>
-                </div>
+              <div className="flex items-center justify-end mb-4 sm:mb-8 shrink-0">
                 <Button variant="ghost" onClick={() => setView('menu')} className="p-2 -mr-2 bg-gray-50 hover:bg-gray-100 rounded-full">
                   <X size={20} className="sm:w-6 sm:h-6" />
                 </Button>
@@ -767,50 +741,50 @@ export default function App() {
 
                       <div>
                         <h3 className="text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-3 sm:mb-4 px-2">Moyen de paiement</h3>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 sm:gap-3">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
                           <button 
                             onClick={() => setPaymentMethod('counter')}
-                            className={`flex flex-col items-center justify-center gap-2 sm:gap-3 py-3 sm:py-5 px-3 rounded-[1.25rem] border-2 transition-all ${
+                            className={`flex flex-col items-center justify-center gap-1.5 sm:gap-3 py-3 sm:py-5 px-1.5 sm:px-2 rounded-[1.25rem] border-2 transition-all ${
                               paymentMethod === 'counter' 
                                 ? 'border-logo-bordeaux bg-logo-bordeaux/5 text-logo-bordeaux shadow-md' 
                                 : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
                             }`}
                           >
-                            <Smartphone size={20} className="sm:w-6 sm:h-6" />
-                            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-tight text-center">Comptoir</span>
+                            <Smartphone size={18} className="sm:w-6 sm:h-6" />
+                            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-tight text-center">Comptoir</span>
                           </button>
                           <button 
                             onClick={() => setPaymentMethod('paypal')}
-                            className={`flex flex-col items-center justify-center gap-2 sm:gap-3 py-3 sm:py-5 px-3 rounded-[1.25rem] border-2 transition-all ${
+                            className={`flex flex-col items-center justify-center gap-1.5 sm:gap-3 py-3 sm:py-5 px-1.5 sm:px-2 rounded-[1.25rem] border-2 transition-all ${
                               paymentMethod === 'paypal' 
                                 ? 'border-[#0070ba] bg-[#0070ba]/5 text-[#0070ba] shadow-md' 
                                 : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
                             }`}
                           >
-                            <img src={paypalLogo} alt="PayPal" className="h-3 sm:h-4 object-contain" />
-                            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-tight">PayPal</span>
+                            <img src={paypalLogo} alt="PayPal" className="h-2.5 sm:h-4 object-contain" />
+                            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-tight">PayPal</span>
                           </button>
                           <button 
                             onClick={() => setPaymentMethod('wero')}
-                            className={`flex flex-col items-center justify-center gap-2 sm:gap-3 py-3 sm:py-5 px-3 rounded-[1.25rem] border-2 transition-all ${
+                            className={`flex flex-col items-center justify-center gap-1.5 sm:gap-3 py-3 sm:py-5 px-1.5 sm:px-2 rounded-[1.25rem] border-2 transition-all ${
                               paymentMethod === 'wero' 
                                 ? 'border-blue-600 bg-blue-50 text-blue-600 shadow-md' 
                                 : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
                             }`}
                           >
-                            <img src={weroLogo} alt="Wero" className="h-3 sm:h-4 object-contain" />
-                            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-tight">Wero</span>
+                            <img src={weroLogo} alt="Wero" className="h-2.5 sm:h-4 object-contain" />
+                            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-tight">Wero</span>
                           </button>
                           <button 
                             onClick={() => setPaymentMethod('revolut')}
-                            className={`flex flex-col items-center justify-center gap-2 sm:gap-3 py-3 sm:py-5 px-3 rounded-[1.25rem] border-2 transition-all ${
+                            className={`flex flex-col items-center justify-center gap-1.5 sm:gap-3 py-3 sm:py-5 px-1.5 sm:px-3 rounded-[1.25rem] border-2 transition-all ${
                               paymentMethod === 'revolut' 
                                 ? 'border-black bg-black/5 text-black shadow-md' 
                                 : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
                             }`}
                           >
-                            <img src={revolutLogo} alt="Revolut" className="h-3 sm:h-4 object-contain" />
-                            <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-tight">Revolut</span>
+                            <img src={revolutLogo} alt="Revolut" className="h-2.5 sm:h-4 object-contain" />
+                            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-tight">Revolut</span>
                           </button>
                         </div>
                       </div>
@@ -852,14 +826,8 @@ export default function App() {
               initial={{ opacity: 0, scale: 0.98 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.98 }}
-              className="max-w-4xl mx-auto w-full"
+              className="max-w-4xl mx-auto w-full pt-4"
             >
-              <div className="flex items-center gap-3 mb-8">
-                <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-                  <Clock size={20} />
-                </div>
-                <h2 className="text-3xl font-black uppercase tracking-tighter">Mes Commandes</h2>
-              </div>
               {orders.length === 0 ? (
                 <div className="text-center py-16 bg-white rounded-3xl border border-gray-100 shadow-sm">
                   <Clock size={48} className="mx-auto text-gray-200 mb-4" />

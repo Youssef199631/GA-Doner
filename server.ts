@@ -38,15 +38,15 @@ async function startServer() {
     let errors: string[] = [];
 
     const paymentLabels: Record<string, string> = {
-      'counter': 'Espèces / Comptoir',
+      'counter': 'Comptoir',
       'paypal': 'Paypal',
       'wero': 'Wero',
       'revolut': 'Revolut'
     };
 
     const paymentLabel = paymentLabels[order.paymentMethod] || order.paymentMethod;
-    const pickupLabel = order.pickupTime === 'now' ? 'Immédiatement' : 
-                        order.pickupTime === '20min' ? 'Dans 20 minutes' : 'Dans 1 heure';
+    const pickupLabel = order.pickupTime === 'now' ? 'ASAP' : 
+                        order.pickupTime === '20min' ? '20 min' : '1h';
 
     // 1. Attempt Email Notification
     if (SMTP_HOST && SMTP_USER && SMTP_PASS) {
@@ -142,13 +142,13 @@ async function startServer() {
           ? twilioLib(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN) 
           : new (twilioLib as any)(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
 
-        const itemsShort = order.items.map((item: any) => `${item.quantity}x ${item.name.substring(0, 15)}`).join(', ');
+        const itemsShort = order.items.map((item: any) => `${item.quantity}x ${item.name.substring(0, 12)}`).join(', ');
 
-        const message = `🍔 GA Doner Grill\n` +
+        const message = `GA DONER GRILL\n` +
                        `CMD #${order.id.slice(-4).toUpperCase()} | ${order.customerName}\n` +
-                       `🛒 ${itemsShort}\n` +
-                       `💰 Total: ${order.total.toFixed(2)}€\n` +
-                       `💳 ${paymentLabel} | 🕒 ${pickupLabel}`;
+                       `ART: ${itemsShort}\n` +
+                       `TOT: ${order.total.toFixed(2)}€\n` +
+                       `PAY: ${paymentLabel} | RDV: ${pickupLabel}`;
 
         console.log('[SMS] Sending to:', ownerPhoneNumber.substring(0, 6) + '...');
         await client.messages.create({ 
