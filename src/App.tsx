@@ -530,7 +530,10 @@ export default function App() {
       <div className="relative z-10 min-h-screen flex flex-col w-full">
         {/* Simple Points Indicator for Customers */}
         {profile?.role === 'customer' && (
-          <div className="fixed top-4 right-4 z-40">
+          <div 
+            className="fixed right-4 z-40" 
+            style={{ top: 'calc(env(safe-area-inset-top) + 12px)' }}
+          >
              <div className="bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-full shadow-lg border border-gray-100 flex items-center gap-2 text-logo-bordeaux font-bold text-xs ring-1 ring-black/5">
                 <Star size={14} fill="currentColor" />
                 <span>{profile.loyaltyPoints} pts</span>

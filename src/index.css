@@ -18,6 +18,19 @@
   }
 }
 
+/* Hide Vercel Preview Toolbar and feedback elements */
+#vercel-live-feedback, 
+.vercel-toolbar, 
+[data-vercel-toolbar],
+[data-vercel-feedback-ignore] {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+
 body {
-  @apply antialiased;
+  @apply antialiased overflow-x-hidden;
+  /* Prevent blue highlight on touch in native apps */
+  -webkit-tap-highlight-color: transparent;
 }
