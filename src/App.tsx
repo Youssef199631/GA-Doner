@@ -324,9 +324,24 @@ export default function App() {
   };
 
   const sendOrderSMS = (order: Order) => {
-    const message = encodeURIComponent(generateOrderSMS(order));
-    // Restaurant number: +33749018193
-    window.location.href = `sms:+33749018193?body=${message}`;
+    const message = generateOrderSMS(order);
+    const encodedMessage = encodeURIComponent(message);
+    const phoneNumber = '+33749018193';
+    
+    // Detect iOS to use the correct SMS body separator
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const separator = isIOS ? '&' : '?';
+    
+    // Detect if we are in Median / GoNative
+    const isMedian = (window as any).gonative || /gonative/i.test(navigator.userAgent);
+    
+    if (isMedian) {
+      // Median / GoNative often handles standard sms: schemes if allowed in dashboard
+      window.location.href = `sms:${phoneNumber}${separator}body=${encodedMessage}`;
+    } else {
+      // Standard web way
+      window.location.href = `sms:${phoneNumber}${separator}body=${encodedMessage}`;
+    }
   };
 
   const placeOrder = async () => {
@@ -375,8 +390,16 @@ export default function App() {
             customerEmail: user.email
           })
         });
+        
         const result = await response.json();
         console.log('[NOTIFY] Result:', result);
+        
+        if (!result.smsSent && result.errors) {
+          console.error('[SMS-SERVER] Failed:', result.errors);
+          // If server-side SMS fails but it's a mobile app, the client-side SMS (already triggered) is our backup
+        } else if (result.smsSent) {
+          notify("Confirmation envoyée au restaurant !", "success");
+        }
       } catch (e) {
         console.error("Notification trigger failed:", e);
       }
@@ -525,51 +548,15 @@ export default function App() {
       style={{ backgroundImage: `linear-gradient(rgba(97, 8, 7, 0.6), rgba(97, 8, 7, 0.7)), url(${backgroundImage})` }}
     >
       <div className="relative z-10 min-h-screen flex flex-col w-full">
-        {/* Header wrapper for max-width */}
-        <div className="sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm w-full">
-          <header className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between text-logo-text">
-            <div className="flex items-center gap-3">
-              <div className={`w-10 h-10 rounded-full flex items-center justify-center overflow-hidden shadow-md ${profile?.role === 'owner' ? 'bg-indigo-600 shadow-indigo-600/20' : 'bg-white shadow-logo-cream/20'}`}>
-                {profile?.role === 'owner' ? (
-                  <UserIcon size={20} className="text-white" />
-                ) : (
-                  <img src={logo} alt="Logo" className="w-full h-full object-cover" onError={(e: any) => e.target.src = 'https://cdn-icons-png.flaticon.com/512/3170/3170733.png'} />
-                )}
-              </div>
-              <div>
-                <h1 className="font-bold text-lg leading-tight uppercase tracking-tight">
-                  {profile?.role === 'owner' ? 'Dashboard' : 'GA Döner & Grill'}
-                </h1>
-                {profile && profile.role === 'customer' && (
-                  <div className="flex items-center gap-1 text-xs text-logo-bordeaux font-bold">
-                    <Star size={12} fill="currentColor" />
-                    <span>{profile.loyaltyPoints} points</span>
-                  </div>
-                )}
-                {profile && profile.role === 'owner' && (
-                  <div className="text-[10px] text-indigo-600 font-bold uppercase tracking-wider">
-                    Connecté en tant que Gérant
-                  </div>
-                )}
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              {profile?.role === 'owner' && (
-                <Button 
-                  variant={view === 'admin' ? 'primary' : 'ghost'} 
-                  onClick={() => setView('admin')}
-                  className="p-2"
-                >
-                  <Bell size={20} />
-                </Button>
-              )}
-              <Button variant="ghost" onClick={logout} className="p-2 text-gray-400 hover:text-red-500">
-                <LogOut size={20} />
-              </Button>
-            </div>
-          </header>
-        </div>
+        {/* Header masqué pour les utilisateurs connectés (look "App" native) */}
+        {profile?.role === 'customer' && (
+          <div className="fixed top-6 right-6 z-40">
+             <div className="bg-white/90 backdrop-blur-md px-4 py-2 rounded-full shadow-lg border border-gray-100 flex items-center gap-2 text-logo-bordeaux font-bold text-sm">
+                <Star size={16} fill="currentColor" />
+                <span>{profile.loyaltyPoints} pts</span>
+             </div>
+          </div>
+        )}
 
       {/* Main Content */}
       <main className="max-w-5xl mx-auto w-full p-4 sm:p-6 lg:p-8">
@@ -1192,24 +1179,39 @@ export default function App() {
               className={`flex flex-col items-center gap-1 transition-all ${view === 'orders' ? 'text-logo-bordeaux' : 'text-gray-400'}`}
             >
               <Clock size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Commandes</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider">Suivi</span>
+            </button>
+
+            <button 
+              onClick={logout}
+              className="flex flex-col items-center gap-1 text-gray-400 hover:text-red-500 transition-all"
+            >
+              <LogOut size={24} />
+              <span className="text-[10px] font-bold uppercase tracking-wider">Sortie</span>
             </button>
           </>
         ) : (
           <>
             <button 
-              onClick={() => { setView('admin'); setView('admin'); }} // Force re-render if needed
+              onClick={() => setView('admin')}
               className={`flex flex-col items-center gap-1 transition-all ${view === 'admin' ? 'text-logo-bordeaux' : 'text-gray-400'}`}
             >
               <Bell size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Commandes</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider">Ventes</span>
             </button>
             <button 
               onClick={() => setView('menu')}
               className={`flex flex-col items-center gap-1 transition-all ${view === 'menu' ? 'text-logo-bordeaux' : 'text-gray-400'}`}
             >
               <MenuIcon size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Menu</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider">Cartes</span>
+            </button>
+            <button 
+              onClick={logout}
+              className="flex flex-col items-center gap-1 text-gray-400 hover:text-red-500 transition-all"
+            >
+              <LogOut size={24} />
+              <span className="text-[10px] font-bold uppercase tracking-wider">Sortie</span>
             </button>
           </>
         )}
