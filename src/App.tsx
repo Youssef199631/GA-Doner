@@ -1,6 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { auth, db, googleProvider, handleFirestoreError, OperationType } from './firebase';
-import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
+import { 
+  signInWithPopup, 
+  signInWithRedirect,
+  getRedirectResult,
+  signOut, 
+  onAuthStateChanged 
+} from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, serverTimestamp, where } from 'firebase/firestore';
 import { MenuItem, UserProfile, Order, OrderItem, Category, OrderStatus, PaymentMethod, PickupTime } from './types';
 import { INITIAL_MENU } from './data/menu';
@@ -99,6 +105,30 @@ export default function App() {
   const [editingPrices, setEditingPrices] = useState<{[key: string]: string}>({});
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [showNotification, setShowNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+
+  // Auth Redirect Result Handler
+  useEffect(() => {
+    getRedirectResult(auth)
+      .then((result) => {
+        if (result) {
+          notify("Connexion réussie via mobile", "success");
+        }
+      })
+      .catch((error) => {
+        console.error("Redirect login error detail:", error);
+        
+        // Handle specific "missing initial state" error
+        if (error.code === 'auth/internal-error' || error.message?.includes('missing initial state')) {
+          notify("Le navigateur mobile a bloqué la session. Essayez de vous connecter via Chrome ou Safari externe.", "error");
+          // Attempt to clear any stale state
+          localStorage.removeItem(`firebase:authInternal:${auth.app.options.apiKey}:ALL`);
+        } else if (error.code === 'auth/unauthorized-domain') {
+          notify("Domaine non autorisé dans la console Firebase. Ajoutez votre URL Vercel aux domaines autorisés.", "error");
+        } else {
+          notify("Erreur de connexion mobile: " + (error.message || "inconnue"), "error");
+        }
+      });
+  }, [auth.app.options.apiKey]);
 
   // Auth Listener
   useEffect(() => {
@@ -215,9 +245,17 @@ export default function App() {
 
   const login = async () => {
     try {
-      await signInWithPopup(auth, googleProvider);
+      // Check if we are in a WebView or mobile device
+      const isWebView = /wv|WebView/i.test(navigator.userAgent) || (window as any).gonative;
+      
+      if (isWebView) {
+        await signInWithRedirect(auth, googleProvider);
+      } else {
+        await signInWithPopup(auth, googleProvider);
+      }
     } catch (error) {
       console.error("Login failed", error);
+      notify("Échec de la connexion. Si vous êtes sur mobile, essayez d'ouvrir dans un navigateur externe.", "error");
     }
   };
 
