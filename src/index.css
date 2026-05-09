@@ -18,19 +18,31 @@
   }
 }
 
-/* Hide Vercel Preview Toolbar and feedback elements */
+/* Hide Vercel Preview Toolbar and feedback elements aggressively */
 #vercel-live-feedback, 
 .vercel-toolbar, 
 [data-vercel-toolbar],
-[data-vercel-feedback-ignore] {
+[data-vercel-feedback-ignore],
+iframe[src*="vercel.com"],
+div[class*="VercelToolbar"],
+#vc-toolbar-host {
   display: none !important;
   visibility: hidden !important;
   opacity: 0 !important;
   pointer-events: none !important;
 }
 
+html, body {
+  @apply h-full w-full;
+  margin: 0;
+  padding: 0;
+  overflow: hidden; /* We handle scrolling in main container */
+}
+
 body {
   @apply antialiased overflow-x-hidden;
   /* Prevent blue highlight on touch in native apps */
   -webkit-tap-highlight-color: transparent;
+  /* Prevent momentum scrolling issues at the root */
+  overscroll-behavior: none;
 }

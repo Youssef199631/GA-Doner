@@ -520,11 +520,11 @@ export default function App() {
 
   return (
     <div 
-      className="min-h-screen bg-logo-bordeaux text-white font-sans pb-32 bg-cover bg-center bg-fixed bg-no-repeat relative"
+      className="h-screen w-full bg-logo-bordeaux text-white font-sans overflow-y-auto bg-cover bg-center bg-fixed bg-no-repeat relative"
       style={{ 
         backgroundImage: `linear-gradient(rgba(97, 8, 7, 0.6), rgba(97, 8, 7, 0.7)), url(${backgroundImage})`,
         paddingTop: 'env(safe-area-inset-top)',
-        paddingBottom: 'calc(env(safe-area-inset-bottom) + 100px)'
+        paddingBottom: 'calc(env(safe-area-inset-bottom) + 120px)'
       }}
     >
       <div className="relative z-10 min-h-screen flex flex-col w-full">
@@ -532,7 +532,7 @@ export default function App() {
         {profile?.role === 'customer' && (
           <div 
             className="fixed right-4 z-40" 
-            style={{ top: 'calc(env(safe-area-inset-top) + 12px)' }}
+            style={{ top: 'calc(env(safe-area-inset-top) + 20px)' }}
           >
              <div className="bg-white/90 backdrop-blur-md px-3 py-1.5 rounded-full shadow-lg border border-gray-100 flex items-center gap-2 text-logo-bordeaux font-bold text-xs ring-1 ring-black/5">
                 <Star size={14} fill="currentColor" />

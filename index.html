@@ -10,10 +10,35 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="theme-color" content="#610807">
     <link rel="icon" type="image/png" href="/logo_restaurant.png">
+    <link rel="manifest" href="/manifest.json">
+    <meta name="apple-mobile-web-app-title" content="GA Döner">
+    <meta name="format-detection" content="telephone=no">
+    <meta name="msapplication-tap-highlight" content="no">
     
     <script>
-      // Force disable Vercel feedback widget via script
+      // Force disable Vercel feedback widget and hide toolbar
       window.VERCEL_FORCE_NO_FEEDBACK = true;
+      if (typeof window !== 'undefined') {
+        window.__VERCEL_TOOLBAR_HIDDEN = true;
+      }
+      
+      // Aggressive MutationObserver to remove injected Vercel UI
+      const observer = new MutationObserver((mutations) => {
+        const toHide = [
+          '#vercel-live-feedback',
+          '.vercel-toolbar',
+          '[data-vercel-toolbar]',
+          '#vc-toolbar-host',
+          'iframe[src*="vercel.com"]'
+        ];
+        toHide.forEach(selector => {
+          const el = document.querySelector(selector);
+          if (el) {
+            el.remove();
+          }
+        });
+      });
+      observer.observe(document.documentElement, { childList: true, subtree: true });
     </script>
   </head>
   <body>
