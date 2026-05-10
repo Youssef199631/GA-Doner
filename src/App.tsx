@@ -105,6 +105,24 @@ export default function App() {
   const [editingPrices, setEditingPrices] = useState<{[key: string]: string}>({});
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [showNotification, setShowNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
+  const [lastScrollY, setLastScrollY] = useState(0);
+  const [showNav, setShowNav] = useState(true);
+
+  // Handle Scroll to hide/show Nav
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+      if (currentScrollY > lastScrollY && currentScrollY > 100) {
+        setShowNav(false);
+      } else {
+        setShowNav(true);
+      }
+      setLastScrollY(currentScrollY);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [lastScrollY]);
 
   // Auth Redirect Result Handler
   useEffect(() => {
@@ -520,11 +538,14 @@ export default function App() {
 
   return (
     <div 
-      className="h-screen w-full bg-logo-bordeaux text-white font-sans overflow-y-auto bg-cover bg-center bg-fixed bg-no-repeat relative"
+      className="min-h-screen w-full bg-logo-bordeaux text-white font-sans relative"
       style={{ 
         backgroundImage: `linear-gradient(rgba(97, 8, 7, 0.6), rgba(97, 8, 7, 0.7)), url(${backgroundImage})`,
+        backgroundAttachment: 'fixed',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
         paddingTop: 'env(safe-area-inset-top)',
-        paddingBottom: 'calc(env(safe-area-inset-bottom) + 120px)'
+        paddingBottom: 'calc(env(safe-area-inset-bottom) + 100px)'
       }}
     >
       <div className="relative z-10 min-h-screen flex flex-col w-full">
@@ -1120,7 +1141,12 @@ export default function App() {
       </main>
 
       {/* Bottom Navigation */}
-      <div className="fixed bottom-0 left-0 right-0 z-50 flex justify-center p-4">
+      <motion.div 
+        className="fixed bottom-0 left-0 right-0 z-50 flex justify-center p-4"
+        initial={{ y: 0 }}
+        animate={{ y: showNav ? 0 : 100 }}
+        transition={{ duration: 0.3, ease: "easeInOut" }}
+      >
         <nav className="bg-white/95 backdrop-blur-xl border border-gray-100 px-8 py-4 rounded-full flex justify-around items-center w-full max-w-lg text-logo-text shadow-2xl">
         {profile?.role === 'customer' ? (
           <>
@@ -1187,7 +1213,7 @@ export default function App() {
           </>
         )}
       </nav>
-      </div>
+      </motion.div>
 
       {/* Order Success & Payment QR Modal */}
       <AnimatePresence>

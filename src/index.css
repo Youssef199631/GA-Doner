@@ -33,16 +33,12 @@ div[class*="VercelToolbar"],
 }
 
 html, body {
-  @apply h-full w-full;
   margin: 0;
   padding: 0;
-  overflow: hidden; /* We handle scrolling in main container */
 }
 
 body {
-  @apply antialiased overflow-x-hidden;
+  @apply antialiased bg-logo-bordeaux;
   /* Prevent blue highlight on touch in native apps */
   -webkit-tap-highlight-color: transparent;
-  /* Prevent momentum scrolling issues at the root */
-  overscroll-behavior: none;
 }
