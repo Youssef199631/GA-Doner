@@ -5,8 +5,72 @@ import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 import twilio from 'twilio';
+import admin from 'firebase-admin';
 
 dotenv.config();
+
+// Initialize Firebase Admin
+function initializeFirebaseAdmin() {
+  if (admin.apps.length > 0) {
+    return true;
+  }
+
+  try {
+    const { FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, FIREBASE_PRIVATE_KEY } = process.env;
+    
+    if (!FIREBASE_PROJECT_ID || !FIREBASE_CLIENT_EMAIL || !FIREBASE_PRIVATE_KEY) {
+      const missing = [];
+      if (!FIREBASE_PROJECT_ID) missing.push('FIREBASE_PROJECT_ID');
+      if (!FIREBASE_CLIENT_EMAIL) missing.push('FIREBASE_CLIENT_EMAIL');
+      if (!FIREBASE_PRIVATE_KEY) missing.push('FIREBASE_PRIVATE_KEY');
+      
+      console.warn(`[FIREBASE] Admin credentials missing: ${missing.join(', ')}. Custom tokens will not work.`);
+      return false;
+    }
+
+    // Clean up the private key
+    // Support literal \n, escaped \\n, and handle potential quotes
+    let cleanKey = FIREBASE_PRIVATE_KEY.trim();
+    
+    // Remove wrapping quotes if present
+    if (cleanKey.startsWith('"') && cleanKey.endsWith('"')) {
+      cleanKey = cleanKey.substring(1, cleanKey.length - 1);
+    }
+    if (cleanKey.startsWith("'") && cleanKey.endsWith("'")) {
+      cleanKey = cleanKey.substring(1, cleanKey.length - 1);
+    }
+
+    // Handle escaped newlines
+    if (cleanKey.includes('\\n')) {
+      cleanKey = cleanKey.replace(/\\n/g, '\n');
+    }
+
+    // Ensure it looks like a PEM key
+    if (!cleanKey.includes('-----BEGIN PRIVATE KEY-----')) {
+      console.warn('[FIREBASE] Warning: FIREBASE_PRIVATE_KEY header missing. attempting to add it...');
+      // If it's just the raw base64 string, this might help, but usually it's just mangled
+    }
+
+    console.log('[FIREBASE] Attempting admin initialization with Project ID:', FIREBASE_PROJECT_ID);
+    
+    admin.initializeApp({
+      credential: admin.credential.cert({
+        projectId: FIREBASE_PROJECT_ID,
+        clientEmail: FIREBASE_CLIENT_EMAIL,
+        privateKey: cleanKey,
+      }),
+    });
+    
+    console.log('[FIREBASE] Admin SDK initialized successfully');
+    return true;
+  } catch (err) {
+    console.error('[FIREBASE] Admin Init Error:', err);
+    return false;
+  }
+}
+
+// Initial attempt
+initializeFirebaseAdmin();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

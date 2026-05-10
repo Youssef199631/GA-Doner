@@ -1,11 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
-import { auth, db, googleProvider, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { 
-  signInWithPopup, 
-  signInWithRedirect,
-  getRedirectResult,
   signOut, 
-  onAuthStateChanged 
+  onAuthStateChanged,
+  signInWithEmailAndPassword,
+  createUserWithEmailAndPassword
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, serverTimestamp, where } from 'firebase/firestore';
 import { MenuItem, UserProfile, Order, OrderItem, Category, OrderStatus, PaymentMethod, PickupTime } from './types';
@@ -30,7 +29,9 @@ import { ShoppingBag,
   CreditCard,
   Copy,
   ExternalLink,
-  ShieldCheck
+  ShieldCheck,
+  Mail,
+  Lock
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeCanvas } from 'qrcode.react';
@@ -107,6 +108,13 @@ export default function App() {
   const [showNotification, setShowNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
   const [lastScrollY, setLastScrollY] = useState(0);
   const [showNav, setShowNav] = useState(true);
+  
+  // Auth State
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isOtpLoading, setIsOtpLoading] = useState(false);
 
   // Handle Scroll to hide/show Nav
   useEffect(() => {
@@ -124,66 +132,70 @@ export default function App() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [lastScrollY]);
 
-  // Auth Redirect Result Handler
-  useEffect(() => {
-    getRedirectResult(auth)
-      .then((result) => {
-        if (result) {
-          notify("Connexion réussie via mobile", "success");
-        }
-      })
-      .catch((error) => {
-        console.error("Redirect login error detail:", error);
-        
-        // Handle specific "missing initial state" error
-        if (error.code === 'auth/internal-error' || error.message?.includes('missing initial state')) {
-          notify("Le navigateur mobile a bloqué la session. Essayez de vous connecter via Chrome ou Safari externe.", "error");
-          // Attempt to clear any stale state
-          localStorage.removeItem(`firebase:authInternal:${auth.app.options.apiKey}:ALL`);
-        } else if (error.code === 'auth/unauthorized-domain') {
-          notify("Domaine non autorisé dans la console Firebase. Ajoutez votre URL Vercel aux domaines autorisés.", "error");
-        } else {
-          notify("Erreur de connexion mobile: " + (error.message || "inconnue"), "error");
-        }
-      });
-  }, [auth.app.options.apiKey]);
-
   // Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      console.log("[AUTH] State change detected:", firebaseUser?.uid);
       setUser(firebaseUser);
       if (firebaseUser) {
-        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-        if (userDoc.exists()) {
-          const userData = userDoc.data() as UserProfile;
-          const owners = ['agencevisiondigitale@gmail.com', 'sosdepannage54@gmail.com', 'contact@immo-khattabi-conseil.ma', 'ouazzani9633@gmail.com'];
-          const isOwnerInList = owners.includes(firebaseUser.email || '');
+        try {
+          console.log("[AUTH] Fetching profile for:", firebaseUser.uid);
+          const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+          const adminEmails = ['ouazzani9633@gmail.com'];
           
-          if (isOwnerInList && userData.role !== 'owner') {
-            userData.role = 'owner';
-            await updateDoc(doc(db, 'users', firebaseUser.uid), { role: 'owner' });
+          const userEmail = firebaseUser.email?.toLowerCase() || '';
+          
+          const isOwner = adminEmails.some(o => o.toLowerCase() === userEmail);
+          console.log("[AUTH] User is admin:", isOwner);
+
+          if (userDoc.exists()) {
+            const userData = userDoc.data() as UserProfile;
+            console.log("[AUTH] Profile found:", userData.role);
+            
+            if (isOwner && userData.role !== 'owner') {
+              userData.role = 'owner';
+              await updateDoc(doc(db, 'users', firebaseUser.uid), { role: 'owner' });
+              console.log("[AUTH] Upgraded to owner role");
+            }
+            
+            setProfile(userData);
+          } else {
+            console.log("[AUTH] Profile NOT found, creating one...");
+            const phoneFromUid = firebaseUser.uid.startsWith('+') ? firebaseUser.uid : (firebaseUser.phoneNumber || '');
+
+            const defaultName = firebaseUser.email ? firebaseUser.email.split('@')[0] : 'Utilisateur';
+
+            const newProfile: UserProfile = {
+              uid: firebaseUser.uid,
+              email: firebaseUser.email || '',
+              phoneNumber: firebaseUser.phoneNumber || phoneFromUid,
+              displayName: firebaseUser.displayName || firebaseUser.phoneNumber || phoneFromUid || defaultName,
+              loyaltyPoints: 0,
+              role: isOwner ? 'owner' : 'customer'
+            };
+            
+            try {
+              await setDoc(doc(db, 'users', firebaseUser.uid), newProfile as any);
+              console.log("[AUTH] New profile created");
+              setProfile(newProfile);
+            } catch (err) {
+              console.error("[AUTH] Profile creation failed:", err);
+              setProfile(newProfile);
+              notify("Profil temporaire actif (Erreur synchronisation)", "error");
+            }
           }
-          
-          setProfile(userData);
-          if (userData.role === 'owner') setView('admin');
-        } else {
-          // Create default profile
-          const owners = ['agencevisiondigitale@gmail.com', 'sosdepannage54@gmail.com', 'contact@immo-khattabi-conseil.ma', 'ouazzani9633@gmail.com'];
-          const isOwner = owners.includes(firebaseUser.email || '');
-          const newProfile: UserProfile = {
-            uid: firebaseUser.uid,
-            email: firebaseUser.email || '',
-            displayName: firebaseUser.displayName || '',
-            loyaltyPoints: 0,
-            role: isOwner ? 'owner' : 'customer'
-          };
-          await setDoc(doc(db, 'users', firebaseUser.uid), newProfile);
-          setProfile(newProfile);
-          if (isOwner) setView('admin');
+        } catch (error) {
+          console.error("[AUTH] Auth state update error:", error);
+          notify("Erreur lors de la récupération du profil", "error");
         }
       } else {
+        console.log("[AUTH] No user logged in");
         setProfile(null);
+        if (view === 'admin' || view === 'profile' || view === 'orders') {
+          setView('menu');
+        }
       }
+      console.log("[AUTH] Marking auth as ready");
       setIsAuthReady(true);
     });
     return () => unsubscribe();
@@ -261,19 +273,53 @@ export default function App() {
     setTimeout(() => setShowNotification(null), 3000);
   };
 
-  const login = async () => {
+  const loginWithEmail = async (e: any) => {
+    e.preventDefault();
+    if (!email || !password) {
+      notify("Veuillez remplir tous les champs", "error");
+      return;
+    }
+    setIsOtpLoading(true);
     try {
-      // Check if we are in a WebView or mobile device
-      const isWebView = /wv|WebView/i.test(navigator.userAgent) || (window as any).gonative;
-      
-      if (isWebView) {
-        await signInWithRedirect(auth, googleProvider);
-      } else {
-        await signInWithPopup(auth, googleProvider);
-      }
-    } catch (error) {
-      console.error("Login failed", error);
-      notify("Échec de la connexion. Si vous êtes sur mobile, essayez d'ouvrir dans un navigateur externe.", "error");
+      await signInWithEmailAndPassword(auth, email, password);
+      notify("Connexion réussie !", "success");
+    } catch (error: any) {
+      console.error("Email login error:", error);
+      let msg = "Identifiants invalides";
+      if (error.code === 'auth/user-not-found') msg = "Utilisateur non trouvé";
+      if (error.code === 'auth/wrong-password') msg = "Mot de passe incorrect";
+      notify(msg, "error");
+    } finally {
+      setIsOtpLoading(false);
+    }
+  };
+
+  const registerWithEmail = async (e: any) => {
+    e.preventDefault();
+    if (!email || !password || !confirmPassword) {
+      notify("Veuillez remplir tous les champs", "error");
+      return;
+    }
+    if (password !== confirmPassword) {
+      notify("Les mots de passe ne correspondent pas", "error");
+      return;
+    }
+    if (password.length < 6) {
+      notify("Le mot de passe doit faire au moins 6 caractères", "error");
+      return;
+    }
+    setIsOtpLoading(true);
+    try {
+      await createUserWithEmailAndPassword(auth, email, password);
+      notify("Compte créé avec succès !", "success");
+    } catch (error: any) {
+      console.error("Email registration error:", error);
+      let msg = "Erreur lors de l'inscription";
+      if (error.code === 'auth/email-already-in-use') msg = "Cet email est déjà utilisé";
+      if (error.code === 'auth/invalid-email') msg = "Email invalide";
+      notify(msg, "error");
+    } finally {
+      setIsOtpLoading(false);
     }
   };
 
@@ -349,8 +395,8 @@ export default function App() {
       pickupTime: pickupTime,
       createdAt: serverTimestamp(),
       pointsEarned: Math.floor(totalCart),
-      customerName: user.displayName || 'Client',
-      customerEmail: user.email || ''
+      customerName: user.displayName || user.phoneNumber || 'Client',
+      customerEmail: user.email || user.phoneNumber || 'Pas d\'email'
     };
 
     try {
@@ -526,11 +572,59 @@ export default function App() {
           <div className="w-32 h-32 bg-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl p-4 border border-gray-50">
             <img src={logo} alt="Logo" className="w-full h-full object-contain" />
           </div>
-          <h1 className="text-3xl font-black text-white mb-2 uppercase tracking-tight">GA Döner & Grill</h1>
+          <h1 className="text-3xl font-black text-logo-text mb-2 uppercase tracking-tight">GA Döner & Grill</h1>
           <p className="text-gray-500 mb-8 leading-relaxed">Le goût authentique du grill.<br/>Connectez-vous pour commander et profiter de vos points fidélité.</p>
-          <Button onClick={login} className="w-full py-4 text-lg">
-            Se connecter avec Google
-          </Button>
+          
+          <form onSubmit={authMode === 'login' ? loginWithEmail : registerWithEmail} className="space-y-4">
+            <div className="relative">
+              <input 
+                type="email" 
+                placeholder="Email" 
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
+              />
+              <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                <Mail size={20} />
+              </div>
+            </div>
+            <div className="relative">
+              <input 
+                type="password" 
+                placeholder="Mot de passe" 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
+              />
+              <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                <Lock size={20} />
+              </div>
+            </div>
+            {authMode === 'register' && (
+              <div className="relative">
+                <input 
+                  type="password" 
+                  placeholder="Confirmer le mot de passe" 
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
+                />
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                  <Lock size={20} />
+                </div>
+              </div>
+            )}
+            <Button type="submit" className="w-full py-4 text-lg" disabled={isOtpLoading}>
+              {isOtpLoading ? "Chargement..." : authMode === 'login' ? "Se connecter" : "S'inscrire"}
+            </Button>
+            <button 
+              type="button"
+              onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+              className="text-xs font-bold text-gray-400 uppercase tracking-widest hover:text-logo-bordeaux transition-colors mt-4 block mx-auto"
+            >
+              {authMode === 'login' ? "Créer un compte" : "Déjà un compte ? Se connecter"}
+            </button>
+          </form>
         </motion.div>
       </div>
     );
@@ -1148,7 +1242,31 @@ export default function App() {
         transition={{ duration: 0.3, ease: "easeInOut" }}
       >
         <nav className="bg-white/95 backdrop-blur-xl border border-gray-100 px-8 py-4 rounded-full flex justify-around items-center w-full max-w-lg text-logo-text shadow-2xl">
-        {profile?.role === 'customer' ? (
+        {profile?.role === 'owner' ? (
+          <>
+            <button 
+              onClick={() => setView('admin')}
+              className={`flex flex-col items-center gap-1 transition-all ${view === 'admin' ? 'text-logo-bordeaux' : 'text-gray-400'}`}
+            >
+              <Bell size={24} />
+              <span className="text-[10px] font-bold uppercase tracking-wider">Ventes</span>
+            </button>
+            <button 
+              onClick={() => setView('menu')}
+              className={`flex flex-col items-center gap-1 transition-all ${view === 'menu' ? 'text-logo-bordeaux' : 'text-gray-400'}`}
+            >
+              <MenuIcon size={24} />
+              <span className="text-[10px] font-bold uppercase tracking-wider">Cartes</span>
+            </button>
+            <button 
+              onClick={logout}
+              className="flex flex-col items-center gap-1 text-gray-400 hover:text-red-500 transition-all"
+            >
+              <LogOut size={24} />
+              <span className="text-[10px] font-bold uppercase tracking-wider">Sortie</span>
+            </button>
+          </>
+        ) : (
           <>
             <button 
               onClick={() => setView('menu')}
@@ -1170,7 +1288,7 @@ export default function App() {
               )}
               <span className="text-[10px] font-bold uppercase tracking-wider">Panier</span>
             </button>
-
+  
             <button 
               onClick={() => setView('orders')}
               className={`flex flex-col items-center gap-1 transition-all ${view === 'orders' ? 'text-logo-bordeaux' : 'text-gray-400'}`}
@@ -1178,31 +1296,7 @@ export default function App() {
               <Clock size={24} />
               <span className="text-[10px] font-bold uppercase tracking-wider">Suivi</span>
             </button>
-
-            <button 
-              onClick={logout}
-              className="flex flex-col items-center gap-1 text-gray-400 hover:text-red-500 transition-all"
-            >
-              <LogOut size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Sortie</span>
-            </button>
-          </>
-        ) : (
-          <>
-            <button 
-              onClick={() => setView('admin')}
-              className={`flex flex-col items-center gap-1 transition-all ${view === 'admin' ? 'text-logo-bordeaux' : 'text-gray-400'}`}
-            >
-              <Bell size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Ventes</span>
-            </button>
-            <button 
-              onClick={() => setView('menu')}
-              className={`flex flex-col items-center gap-1 transition-all ${view === 'menu' ? 'text-logo-bordeaux' : 'text-gray-400'}`}
-            >
-              <MenuIcon size={24} />
-              <span className="text-[10px] font-bold uppercase tracking-wider">Cartes</span>
-            </button>
+  
             <button 
               onClick={logout}
               className="flex flex-col items-center gap-1 text-gray-400 hover:text-red-500 transition-all"

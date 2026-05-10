@@ -8,6 +8,10 @@
   --color-logo-text: #2d0a0a;
 }
 
+.grecaptcha-badge { 
+  visibility: hidden !important; 
+}
+
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar {
     display: none;

@@ -7,11 +7,12 @@
       "properties": {
         "uid": { "type": "string", "description": "Firebase Auth UID" },
         "email": { "type": "string", "format": "email" },
+        "phoneNumber": { "type": "string" },
         "displayName": { "type": "string" },
         "loyaltyPoints": { "type": "number", "description": "Points earned from orders" },
         "role": { "type": "string", "enum": ["customer", "owner"] }
       },
-      "required": ["uid", "email", "role"]
+      "required": ["uid", "role"]
     },
     "MenuItem": {
       "title": "MenuItem",
