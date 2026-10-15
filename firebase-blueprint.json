@@ -49,6 +49,9 @@
         "total": { "type": "number" },
         "status": { "type": "string", "enum": ["pending", "validated", "ready", "completed", "cancelled"] },
         "createdAt": { "type": "string", "format": "date-time" },
+        "estimatedMinutes": { "type": "number", "description": "Base preparation time in minutes" },
+        "extraMinutes": { "type": "number", "description": "Extra preparation time added by owner" },
+        "targetReadyAt": { "type": "string", "format": "date-time", "description": "Estimated ready time" },
         "pointsEarned": { "type": "number" }
       },
       "required": ["userId", "items", "total", "status", "createdAt"]

@@ -52,6 +52,7 @@ service cloud.firestore {
       return isAuthenticated() &&
         (
           email == "ouazzani9633@gmail.com" ||
+          email == "sosdepannage54@gmail.com" ||
           (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
            get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'owner')
         );

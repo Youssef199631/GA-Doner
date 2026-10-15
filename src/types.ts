@@ -21,6 +21,7 @@ export interface MenuItem {
   price: number;
   category: Category;
   image?: string;
+  images?: string[];
   options?: string[];
 }
 
@@ -33,12 +34,21 @@ export interface UserProfile {
   role: 'customer' | 'owner';
 }
 
+export interface KebabOptions {
+  crudites: string[];
+  sauces: string[];
+  supplements: { name: string; price: number }[];
+  specialNote?: string;
+}
+
 export interface OrderItem {
   menuItemId: string;
   name: string;
   price: number;
+  basePrice?: number;
   quantity: number;
   comment?: string;
+  kebabOptions?: KebabOptions;
 }
 
 export type OrderStatus = 'pending' | 'validated' | 'ready' | 'completed' | 'cancelled';
@@ -56,6 +66,9 @@ export interface Order {
   paymentMethod: PaymentMethod;
   pickupTime: PickupTime;
   createdAt: any; // Firestore Timestamp
+  estimatedMinutes?: number; // Base preparation time in minutes
+  extraMinutes?: number; // Extra minutes added by owner/chef
+  targetReadyAt?: any; // Firestore Timestamp or Date when order will be ready
   pointsEarned: number;
   customerName?: string;
   customerEmail?: string;

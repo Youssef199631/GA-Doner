@@ -4,11 +4,14 @@ import {
   signOut, 
   onAuthStateChanged,
   signInWithEmailAndPassword,
-  createUserWithEmailAndPassword
+  createUserWithEmailAndPassword,
+  sendPasswordResetEmail
 } from 'firebase/auth';
 import { doc, getDoc, setDoc, collection, onSnapshot, query, orderBy, addDoc, updateDoc, deleteDoc, serverTimestamp, where } from 'firebase/firestore';
-import { MenuItem, UserProfile, Order, OrderItem, Category, OrderStatus, PaymentMethod, PickupTime } from './types';
-import { INITIAL_MENU } from './data/menu';
+import { MenuItem, UserProfile, Order, OrderItem, Category, OrderStatus, PaymentMethod, PickupTime, KebabOptions } from './types';
+import { INITIAL_MENU, MENU_DATA_MAP } from './data/menu';
+import { KebabCustomizerModal } from './components/KebabCustomizerModal';
+import { OrderCountdownCard } from './components/OrderCountdownCard';
 import { ShoppingBag, 
   User as UserIcon, 
   LogOut, 
@@ -19,10 +22,12 @@ import { ShoppingBag,
   CheckCircle, 
   ChefHat, 
   Star,
+  ChevronLeft,
   ChevronRight,
   Menu as MenuIcon,
   X,
   Bell,
+  BellRing,
   UtensilsCrossed,
   QrCode,
   Smartphone,
@@ -31,7 +36,10 @@ import { ShoppingBag,
   ExternalLink,
   ShieldCheck,
   Mail,
-  Lock
+  Lock,
+  Sparkles,
+  Flame,
+  Eye
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeCanvas } from 'qrcode.react';
@@ -47,18 +55,22 @@ const backgroundImage = '/background.jpeg';
 const Button = ({ children, onClick, variant = 'primary', className = '', disabled = false, ...props }: any) => {
   const baseStyles = "px-4 py-2 rounded-xl font-medium transition-all active:scale-95 disabled:opacity-50 disabled:active:scale-100 flex items-center justify-center gap-2";
   const variants: any = {
-    primary: "bg-logo-cream text-logo-text hover:opacity-90 shadow-sm",
+    primary: "bg-logo-cream text-logo-text hover:brightness-105 shadow-sm border border-logo-cream/50",
     secondary: "bg-white text-logo-text border border-logo-text hover:bg-logo-cream",
     ghost: "bg-transparent text-logo-text hover:bg-white/10",
     outline: "bg-transparent text-logo-bordeaux border border-logo-bordeaux hover:bg-logo-bordeaux/10",
-    dark: "bg-logo-text text-white hover:opacity-90"
+    dark: "bg-logo-text text-white hover:opacity-90",
+    bordeaux: "bg-logo-bordeaux text-white hover:brightness-110 shadow-sm"
   };
   
+  const hasCustomBg = className.includes('bg-');
+  const variantClass = hasCustomBg ? '' : (variants[variant] || variants.primary);
+
   return (
     <button 
       onClick={onClick} 
       disabled={disabled}
-      className={`${baseStyles} ${variants[variant]} ${className}`}
+      className={`${baseStyles} ${variantClass} ${className}`}
       {...props}
     >
       {children}
@@ -82,6 +94,40 @@ const Badge = ({ children, variant = 'default' }: any) => {
   );
 };
 
+// Helper to detect kebab dishes that require sauces, crudites and supplements customization
+export const isKebabItem = (item?: MenuItem | { name: string; category?: string } | null): boolean => {
+  if (!item) return false;
+  const name = (item.name || '').toLowerCase();
+  const cat = (item.category || '').toLowerCase();
+  return cat === 'kebab' || name.includes('kebab') || name.includes('döner') || name.includes('doner');
+};
+
+// Pleasant restaurant audio chime using Web Audio API (reliable and self-contained)
+export const playChime = () => {
+  try {
+    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+    if (!AudioContextClass) return;
+    const ctx = new AudioContextClass();
+    const playNote = (freq: number, start: number, duration: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, ctx.currentTime + start);
+      gain.gain.setValueAtTime(0.25, ctx.currentTime + start);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + start + duration);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + start);
+      osc.stop(ctx.currentTime + start + duration);
+    };
+    playNote(587.33, 0, 0.25); // D5
+    playNote(880.00, 0.15, 0.35); // A5
+    playNote(1174.66, 0.32, 0.55); // D6
+  } catch (e) {
+    console.warn("Audio chime error:", e);
+  }
+};
+
 // --- Main App ---
 
 export default function App() {
@@ -97,12 +143,23 @@ export default function App() {
   const [pickupTime, setPickupTime] = useState<PickupTime>('now');
   const [lastPlacedOrder, setLastPlacedOrder] = useState<Order | null>(null);
   const [isPaymentConfirmed, setIsPaymentConfirmed] = useState(false);
-  const [newItem, setNewItem] = useState<{name: string, description: string, price: string, category: Category}>({
+  const [customizingKebab, setCustomizingKebab] = useState<MenuItem | null>(null);
+  const [orderReadyAlertOrder, setOrderReadyAlertOrder] = useState<Order | null>(null);
+  const [newItem, setNewItem] = useState<{name: string, description: string, price: string, category: Category, image: string}>({
     name: '',
     description: '',
     price: '',
-    category: 'Plats'
+    category: 'Plats',
+    image: ''
   });
+  const [selectedImageModal, setSelectedImageModal] = useState<{ 
+    urls?: string[]; 
+    currentIndex?: number; 
+    url?: string; 
+    title: string; 
+    description?: string; 
+  } | null>(null);
+  const [cardImageIndices, setCardImageIndices] = useState<Record<string, number>>({});
   const [editingPrices, setEditingPrices] = useState<{[key: string]: string}>({});
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [showNotification, setShowNotification] = useState<{message: string, type: 'success' | 'error'} | null>(null);
@@ -110,7 +167,7 @@ export default function App() {
   const [showNav, setShowNav] = useState(true);
   
   // Auth State
-  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authMode, setAuthMode] = useState<'landing' | 'login' | 'register' | 'forgot'>('landing');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -132,6 +189,8 @@ export default function App() {
     return () => window.removeEventListener('scroll', handleScroll);
   }, [lastScrollY]);
 
+
+
   // Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
@@ -141,7 +200,7 @@ export default function App() {
         try {
           console.log("[AUTH] Fetching profile for:", firebaseUser.uid);
           const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
-          const adminEmails = ['ouazzani9633@gmail.com'];
+          const adminEmails = ['ouazzani9633@gmail.com', 'sosdepannage54@gmail.com'];
           
           const userEmail = firebaseUser.email?.toLowerCase() || '';
           
@@ -205,7 +264,22 @@ export default function App() {
   useEffect(() => {
     let isSeeding = false;
     const unsubscribe = onSnapshot(collection(db, 'menu'), (snapshot) => {
-      const menuData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as MenuItem));
+      const menuData = snapshot.docs.map(doc => {
+        const d = doc.data() as MenuItem;
+        const fallback = MENU_DATA_MAP[d.name];
+        const imagesList = (d.images && d.images.length > 0) 
+          ? d.images 
+          : (fallback?.images && fallback.images.length > 0)
+            ? fallback.images
+            : (d.image ? [d.image] : (fallback?.image ? [fallback.image] : []));
+        return { 
+          id: doc.id, 
+          ...d,
+          image: d.image || fallback?.image,
+          images: imagesList,
+          description: d.description || fallback?.description
+        } as MenuItem;
+      });
       
       // Cleanup specifically requested 'dddd' items that the user can't delete manually
       const itemsToDelete = menuData.filter(item => item.name.toLowerCase().includes('dddd'));
@@ -216,6 +290,26 @@ export default function App() {
       }
 
       setMenu(menuData.filter(item => !item.name.toLowerCase().includes('dddd')));
+
+      // Auto-sync images and descriptions to Firestore if owner is connected and fields are missing/outdated
+      if (profile?.role === 'owner') {
+        snapshot.docs.forEach(docSnap => {
+          const d = docSnap.data() as MenuItem;
+          const fallback = MENU_DATA_MAP[d.name];
+          if (fallback) {
+            const hasNewImages = fallback.images && (!d.images || d.images.length !== fallback.images.length);
+            const needsImage = !d.image && fallback.image;
+            const needsDesc = fallback.description && !d.description;
+            if (hasNewImages || needsImage || needsDesc) {
+              updateDoc(doc(db, 'menu', docSnap.id), {
+                image: fallback.image,
+                images: fallback.images || (fallback.image ? [fallback.image] : []),
+                ...(needsDesc ? { description: fallback.description } : {})
+              }).catch(e => console.warn('Could not auto-sync image for', d.name, e));
+            }
+          }
+        });
+      }
       
       // Seed menu if empty and user is owner
       if (menuData.length === 0 && profile?.role === 'owner' && !isSeeding) {
@@ -247,16 +341,28 @@ export default function App() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const ordersData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Order));
       
-      // Check for new validated orders to notify user
+      // Check for orders status changes and prep time adjustments
       if (profile.role === 'customer') {
-        const lastOrder = ordersData[0];
-        const prevOrder = orders.find(o => o.id === lastOrder?.id);
-        if (lastOrder && prevOrder && lastOrder.status !== prevOrder.status) {
-          notify(`Votre commande est maintenant: ${lastOrder.status}`);
-        }
+        ordersData.forEach(o => {
+          const prev = orders.find(x => x.id === o.id);
+          if (prev) {
+            // Check if status transitioned to ready
+            if (prev.status !== 'ready' && o.status === 'ready') {
+              playChime();
+              setOrderReadyAlertOrder(o);
+              notify(`🎉 Commande #${o.id.slice(-4).toUpperCase()} prête ! Venez la retirer au comptoir.`, 'success');
+            } else if ((o.extraMinutes || 0) > (prev.extraMinutes || 0)) {
+              const diff = (o.extraMinutes || 0) - (prev.extraMinutes || 0);
+              notify(`⏱️ Le chef a prolongé le temps de préparation (+${diff} min)`, 'success');
+            } else if (prev.status !== o.status) {
+              notify(`Statut commande #${o.id.slice(-4).toUpperCase()} : ${o.status === 'validated' ? 'En préparation' : o.status === 'completed' ? 'Terminée' : o.status}`);
+            }
+          }
+        });
       } else if (profile.role === 'owner') {
         const newOrders = ordersData.filter(o => o.status === 'pending');
         if (newOrders.length > orders.filter(o => o.status === 'pending').length) {
+          playChime();
           notify("Nouvelle commande reçue !");
         }
       }
@@ -323,21 +429,76 @@ export default function App() {
     }
   };
 
-  const logout = () => signOut(auth);
-
-  const addToCart = (item: MenuItem) => {
-    const existing = cart.find(i => i.menuItemId === item.id);
-    if (existing) {
-      setCart(cart.map(i => i.menuItemId === item.id ? { ...i, quantity: i.quantity + 1 } : i));
-    } else {
-      setCart([...cart, { menuItemId: item.id, name: item.name, price: item.price, quantity: 1, comment: '' }]);
+  const handleForgotPassword = async (e: any) => {
+    e.preventDefault();
+    if (!email) {
+      notify("Veuillez entrer votre adresse email", "error");
+      return;
     }
-    notify(`${item.name} ajouté au panier`);
+    setIsOtpLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, email);
+      notify("Email de réinitialisation envoyé ! Vérifiez vos spams s'il n'apparaît pas.", "success");
+      setAuthMode('login');
+    } catch (error: any) {
+      console.error("Forgot password error:", error);
+      let msg = "Une erreur est survenue lors de l'envoi de l'email";
+      if (error.code === 'auth/user-not-found') msg = "Aucun utilisateur trouvé avec cet email";
+      if (error.code === 'auth/invalid-email') msg = "Format d'email invalide";
+      notify(msg, "error");
+    } finally {
+      setIsOtpLoading(false);
+    }
   };
 
-  const updateCartQuantity = (id: string, delta: number) => {
-    setCart(cart.map(i => {
-      if (i.menuItemId === id) {
+  const logout = () => signOut(auth);
+
+  const addToCart = (
+    item: MenuItem,
+    customization?: {
+      kebabOptions: KebabOptions;
+      totalPrice: number;
+      comment: string;
+      quantity?: number;
+    }
+  ) => {
+    if (customization) {
+      const qty = customization.quantity || 1;
+      const unitPrice = customization.totalPrice / qty;
+      const existingIdx = cart.findIndex(
+        i => i.menuItemId === item.id && i.comment === customization.comment
+      );
+      if (existingIdx >= 0) {
+        setCart(cart.map((i, idx) => idx === existingIdx ? { ...i, quantity: i.quantity + qty } : i));
+      } else {
+        setCart([
+          ...cart,
+          {
+            menuItemId: item.id,
+            name: item.name,
+            price: unitPrice,
+            basePrice: item.price,
+            quantity: qty,
+            comment: customization.comment,
+            kebabOptions: customization.kebabOptions,
+          },
+        ]);
+      }
+      notify(`${item.name} personnalisé ajouté au panier`);
+    } else {
+      const existingIdx = cart.findIndex(i => i.menuItemId === item.id && !i.kebabOptions);
+      if (existingIdx >= 0) {
+        setCart(cart.map((i, idx) => idx === existingIdx ? { ...i, quantity: i.quantity + 1 } : i));
+      } else {
+        setCart([...cart, { menuItemId: item.id, name: item.name, price: item.price, quantity: 1, comment: '' }]);
+      }
+      notify(`${item.name} ajouté au panier`);
+    }
+  };
+
+  const updateCartQuantity = (targetIndex: number, delta: number) => {
+    setCart(cart.map((i, idx) => {
+      if (idx === targetIndex) {
         const newQty = Math.max(0, i.quantity + delta);
         return { ...i, quantity: newQty };
       }
@@ -345,11 +506,56 @@ export default function App() {
     }).filter(i => i.quantity > 0));
   };
 
-  const updateCartComment = (id: string, comment: string) => {
-    setCart(cart.map(i => i.menuItemId === id ? { ...i, comment } : i));
+  const updateCartComment = (targetIndex: number, comment: string) => {
+    setCart(cart.map((i, idx) => idx === targetIndex ? { ...i, comment } : i));
   };
 
   const totalCart = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+
+  const setExactOrderPrepTime = async (orderId: string, exactMinutes: number) => {
+    try {
+      const targetMs = Date.now() + exactMinutes * 60 * 1000;
+      await updateDoc(doc(db, 'orders', orderId), {
+        estimatedMinutes: exactMinutes,
+        extraMinutes: 0,
+        targetReadyAt: new Date(targetMs)
+      });
+      notify(`Temps de préparation réglé à ${exactMinutes} min`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'orders');
+    }
+  };
+
+  const extendOrderPrepTime = async (orderId: string, additionalMinutes: number) => {
+    try {
+      const targetOrder = orders.find(o => o.id === orderId);
+      const currentExtra = (targetOrder?.extraMinutes || 0) + additionalMinutes;
+
+      let currentTargetMs: number;
+      if (targetOrder?.targetReadyAt?.toDate) {
+        currentTargetMs = targetOrder.targetReadyAt.toDate().getTime();
+      } else if (targetOrder?.targetReadyAt?.seconds) {
+        currentTargetMs = targetOrder.targetReadyAt.seconds * 1000;
+      } else if (typeof targetOrder?.targetReadyAt === 'number') {
+        currentTargetMs = targetOrder.targetReadyAt;
+      } else if (targetOrder?.createdAt?.toDate) {
+        currentTargetMs = targetOrder.createdAt.toDate().getTime() + ((targetOrder.estimatedMinutes || 20) + (targetOrder.extraMinutes || 0)) * 60 * 1000;
+      } else {
+        currentTargetMs = Date.now();
+      }
+
+      const baseMs = Math.max(Date.now(), currentTargetMs);
+      const newTargetMs = baseMs + additionalMinutes * 60 * 1000;
+
+      await updateDoc(doc(db, 'orders', orderId), {
+        extraMinutes: currentExtra,
+        targetReadyAt: new Date(newTargetMs)
+      });
+      notify(`+${additionalMinutes} min ajoutées à la commande #${orderId.slice(-4).toUpperCase()}`);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'orders');
+    }
+  };
 
   const generateOrderSMS = (order: Order) => {
     if (!order.items || order.items.length === 0) {
@@ -383,21 +589,85 @@ export default function App() {
            `Merci !`;
   };
 
+  const stripUndefinedFields = <T,>(obj: T): T => {
+    if (obj === null || obj === undefined) return null as unknown as T;
+    if (obj instanceof Date) return obj;
+    if (Array.isArray(obj)) {
+      return obj.map(item => stripUndefinedFields(item)).filter(item => item !== undefined) as unknown as T;
+    }
+    if (typeof obj === 'object') {
+      if (obj && typeof obj === 'object' && ('_methodName' in obj || (obj as any).constructor?.name === 'FieldValue')) {
+        return obj;
+      }
+      const clean: Record<string, any> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        if (value !== undefined) {
+          const cleanedVal = stripUndefinedFields(value);
+          if (cleanedVal !== undefined) {
+            clean[key] = cleanedVal;
+          }
+        }
+      }
+      return clean as unknown as T;
+    }
+    return obj;
+  };
+
   const placeOrder = async () => {
     if (!user || cart.length === 0) return;
 
-    const newOrder: Omit<Order, 'id'> = {
+    // Always 20 minutes countdown by default as requested
+    const defaultPrepMinutes = 20;
+    const nowMs = Date.now();
+    const targetReadyAt = new Date(nowMs + defaultPrepMinutes * 60 * 1000);
+
+    const sanitizedItems = cart.map(item => {
+      const sanitized: any = {
+        menuItemId: item.menuItemId || '',
+        name: item.name || '',
+        price: Number(item.price) || 0,
+        quantity: Number(item.quantity) || 1,
+        comment: item.comment || '',
+      };
+      if (typeof item.basePrice === 'number') {
+        sanitized.basePrice = item.basePrice;
+      }
+      if (item.kebabOptions) {
+        const ko: any = {
+          crudites: Array.isArray(item.kebabOptions.crudites) ? item.kebabOptions.crudites : [],
+          sauces: Array.isArray(item.kebabOptions.sauces) ? item.kebabOptions.sauces : [],
+          supplements: Array.isArray(item.kebabOptions.supplements)
+            ? item.kebabOptions.supplements.map(s => ({
+                name: s.name,
+                price: Number(s.price) || 0
+              }))
+            : []
+        };
+        if (item.kebabOptions.specialNote && item.kebabOptions.specialNote.trim()) {
+          ko.specialNote = item.kebabOptions.specialNote.trim();
+        }
+        sanitized.kebabOptions = ko;
+      }
+      return sanitized;
+    });
+
+    const rawOrder: Omit<Order, 'id'> = {
       userId: user.uid,
-      items: cart,
-      total: totalCart,
+      items: sanitizedItems,
+      total: Number(totalCart.toFixed(2)),
       status: 'pending',
       paymentMethod: paymentMethod,
-      pickupTime: pickupTime,
+      pickupTime: pickupTime || '20min',
       createdAt: serverTimestamp(),
+      estimatedMinutes: defaultPrepMinutes,
+      extraMinutes: 0,
+      targetReadyAt: targetReadyAt,
       pointsEarned: Math.floor(totalCart),
       customerName: user.displayName || user.phoneNumber || 'Client',
       customerEmail: user.email || user.phoneNumber || 'Pas d\'email'
     };
+
+    const newOrder = stripUndefinedFields(rawOrder);
 
     try {
       const docRef = await addDoc(collection(db, 'orders'), newOrder);
@@ -502,10 +772,11 @@ export default function App() {
     try {
       await addDoc(collection(db, 'menu'), {
         ...newItem,
-        price: parseFloat(newItem.price)
+        price: parseFloat(newItem.price),
+        image: newItem.image || MENU_DATA_MAP[newItem.name]?.image || ''
       });
       notify(`${newItem.name} ajouté au menu !`);
-      setNewItem({ name: '', description: '', price: '', category: 'Plats' });
+      setNewItem({ name: '', description: '', price: '', category: 'Plats', image: '' });
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'menu');
     }
@@ -548,7 +819,7 @@ export default function App() {
           <motion.div
             animate={{ scale: [1, 1.1, 1] }}
             transition={{ repeat: Infinity, duration: 2 }}
-            className="w-24 h-24 bg-white rounded-3xl shadow-xl flex items-center justify-center p-3"
+            className="w-32 h-20 bg-white rounded-3xl shadow-xl flex items-center justify-center p-3"
           >
             <img src={logo} alt="Loading" className="w-full h-full object-contain" />
           </motion.div>
@@ -559,6 +830,146 @@ export default function App() {
   }
 
   if (!user) {
+    if (authMode === 'landing') {
+      return (
+        <div 
+          className="min-h-screen bg-logo-bordeaux flex flex-col items-center justify-center p-6 text-center bg-cover bg-center bg-no-repeat relative overflow-hidden"
+          style={{ backgroundImage: `linear-gradient(rgba(97, 8, 7, 0.8), rgba(97, 8, 7, 0.8)), url(${backgroundImage})` }}
+        >
+          {/* Subtle moving background overlay */}
+          <div className="absolute inset-0 bg-radial-gradient from-transparent to-black/40 pointer-events-none" />
+
+          <motion.div 
+            initial="hidden"
+            animate="visible"
+            variants={{
+              hidden: { opacity: 0 },
+              visible: { 
+                opacity: 1,
+                transition: { 
+                  staggerChildren: 0.4,
+                  delayChildren: 0.1
+                } 
+              }
+            }}
+            className="max-w-md w-full flex flex-col items-center justify-center relative z-10 px-4"
+          >
+            {/* Logo container with gorgeous spring scale up, bounce and glowing ring */}
+            <motion.div 
+              variants={{
+                hidden: { opacity: 0, scale: 0.6, y: -25 },
+                visible: { 
+                  opacity: 1, 
+                  scale: 1, 
+                  y: 0,
+                  transition: { 
+                    type: "spring",
+                    stiffness: 90,
+                    damping: 14,
+                    duration: 1.0
+                  } 
+                }
+              }}
+              className="w-64 h-36 sm:w-72 sm:h-40 bg-white rounded-[2.5rem] flex items-center justify-center shadow-2xl p-5 border-4 border-logo-cream/30 mb-8 relative"
+            >
+              <motion.div 
+                className="absolute inset-0 rounded-[2.5rem] bg-logo-cream/10"
+                animate={{ scale: [1, 1.12, 1], opacity: [0.3, 0, 0.3] }}
+                transition={{ repeat: Infinity, duration: 3, ease: "easeInOut" }}
+              />
+              <img src={logo} alt="GA Döner & Grill Logo" className="w-full h-full object-contain relative z-10" />
+            </motion.div>
+
+            {/* Restaurant Brand Title */}
+            <motion.h1 
+              variants={{
+                hidden: { opacity: 0, y: 15 },
+                visible: { 
+                  opacity: 1, 
+                  y: 0,
+                  transition: { duration: 0.7, ease: "easeOut" }
+                }
+              }}
+              className="text-4xl font-black text-white tracking-wider uppercase mb-3 drop-shadow-lg font-sans"
+            >
+              GA Döner & Grill
+            </motion.h1>
+
+            {/* Catchy Slogan Phrase */}
+            <motion.p 
+              variants={{
+                hidden: { opacity: 0, y: 15 },
+                visible: { 
+                  opacity: 1, 
+                  y: 0,
+                  transition: { duration: 0.7, ease: "easeOut" }
+                }
+              }}
+              className="text-logo-cream text-xl sm:text-2xl font-bold max-w-sm mx-auto mb-4 italic leading-relaxed drop-shadow"
+            >
+              "Le goût authentique du grill traditionnel & döners faits maison"
+            </motion.p>
+
+            {/* Sub description */}
+            <motion.p 
+              variants={{
+                hidden: { opacity: 0 },
+                visible: { 
+                  opacity: 0.85,
+                  transition: { duration: 0.7 }
+                }
+              }}
+              className="text-white/80 text-sm max-w-sm mx-auto mb-10 leading-relaxed font-medium"
+            >
+              Découvrez notre cuisine artisanale, commandez en ligne et cumulez des points de fidélité ! 🎁
+            </motion.p>
+
+            {/* Interaction Call to Action */}
+            <motion.div 
+              variants={{
+                hidden: { opacity: 0, y: 20 },
+                visible: { 
+                  opacity: 1, 
+                  y: 0,
+                  transition: { duration: 0.7, ease: "easeOut" }
+                }
+              }}
+              className="w-full space-y-4"
+            >
+              <Button 
+                onClick={() => setAuthMode('login')} 
+                className="w-full py-3 sm:py-4 text-base sm:text-lg font-extrabold uppercase tracking-widest shadow-xl bg-logo-cream text-logo-text hover:brightness-105 active:scale-95 transition-all"
+              >
+                Se connecter
+              </Button>
+              
+              <button 
+                onClick={() => setAuthMode('register')} 
+                className="w-full py-3 sm:py-4 text-base sm:text-lg font-extrabold uppercase tracking-widest border-2 border-white/50 text-white rounded-2xl hover:bg-white/10 active:scale-95 transition-all animate-none"
+              >
+                S'inscrire
+              </button>
+            </motion.div>
+
+            {/* Loyalty point highlights */}
+            <motion.div 
+              variants={{
+                hidden: { opacity: 0 },
+                visible: { 
+                  opacity: 1,
+                  transition: { delay: 1.0, duration: 0.7 }
+                }
+              }}
+              className="mt-8 bg-white/10 backdrop-blur-md px-4 py-2 rounded-full border border-white/10 text-xs font-semibold text-logo-cream/90 flex items-center gap-2"
+            >
+              <Star size={14} fill="currentColor" />
+              <span>1€ dépensé = 1 point fidélité</span>
+            </motion.div>
+          </motion.div>
+        </div>
+      );
+    }
+
     return (
       <div 
         className="min-h-screen bg-logo-bordeaux flex flex-col items-center justify-center p-6 text-center bg-cover bg-center bg-no-repeat relative"
@@ -569,62 +980,115 @@ export default function App() {
           animate={{ opacity: 1, scale: 1 }}
           className="max-w-md w-full bg-white p-8 rounded-3xl shadow-xl border border-gray-100 relative z-10"
         >
-          <div className="w-32 h-32 bg-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-xl p-4 border border-gray-50">
+          <div className="w-36 h-20 bg-white rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-md p-3 border border-gray-50">
             <img src={logo} alt="Logo" className="w-full h-full object-contain" />
           </div>
-          <h1 className="text-3xl font-black text-logo-text mb-2 uppercase tracking-tight">GA Döner & Grill</h1>
-          <p className="text-gray-500 mb-8 leading-relaxed">Le goût authentique du grill.<br/>Connectez-vous pour commander et profiter de vos points fidélité.</p>
+          <h1 className="text-2xl font-black text-logo-text mb-2 uppercase tracking-tight">
+            {authMode === 'login' ? "Connexion" : authMode === 'register' ? "Inscription" : "Récupération"}
+          </h1>
+          <p className="text-gray-500 mb-6 leading-relaxed text-sm">
+            {authMode === 'login' && "Entrez vos identifiants pour accéder à votre espace."}
+            {authMode === 'register' && "Créez votre compte pour commencer à cumuler vos points."}
+            {authMode === 'forgot' && "Saisissez votre email pour réinitialiser votre mot de passe."}
+          </p>
           
-          <form onSubmit={authMode === 'login' ? loginWithEmail : registerWithEmail} className="space-y-4">
-            <div className="relative">
-              <input 
-                type="email" 
-                placeholder="Email" 
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
-              />
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
-                <Mail size={20} />
+          {authMode === 'forgot' ? (
+            <form onSubmit={handleForgotPassword} className="space-y-4">
+              <div className="relative">
+                <input 
+                  type="email" 
+                  placeholder="Adresse email" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
+                />
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                  <Mail size={20} />
+                </div>
               </div>
-            </div>
-            <div className="relative">
-              <input 
-                type="password" 
-                placeholder="Mot de passe" 
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
-              />
-              <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
-                <Lock size={20} />
+              <Button type="submit" className="w-full py-3 sm:py-4 text-base sm:text-lg font-bold" disabled={isOtpLoading}>
+                {isOtpLoading ? "Envoi en cours..." : "Réinitialiser le mot de passe"}
+              </Button>
+              <button 
+                type="button"
+                onClick={() => setAuthMode('login')}
+                className="text-xs font-bold text-gray-400 uppercase tracking-widest hover:text-logo-bordeaux transition-colors mt-4 block mx-auto"
+              >
+                Retour à la connexion
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={authMode === 'login' ? loginWithEmail : registerWithEmail} className="space-y-4">
+              <div className="relative">
+                <input 
+                  type="email" 
+                  placeholder="Email" 
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
+                />
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                  <Mail size={20} />
+                </div>
               </div>
-            </div>
-            {authMode === 'register' && (
               <div className="relative">
                 <input 
                   type="password" 
-                  placeholder="Confirmer le mot de passe" 
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Mot de passe" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
                 />
                 <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
                   <Lock size={20} />
                 </div>
               </div>
-            )}
-            <Button type="submit" className="w-full py-4 text-lg" disabled={isOtpLoading}>
-              {isOtpLoading ? "Chargement..." : authMode === 'login' ? "Se connecter" : "S'inscrire"}
-            </Button>
-            <button 
-              type="button"
-              onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
-              className="text-xs font-bold text-gray-400 uppercase tracking-widest hover:text-logo-bordeaux transition-colors mt-4 block mx-auto"
-            >
-              {authMode === 'login' ? "Créer un compte" : "Déjà un compte ? Se connecter"}
-            </button>
-          </form>
+              {authMode === 'login' && (
+                <div className="text-right">
+                  <button 
+                    type="button" 
+                    onClick={() => setAuthMode('forgot')}
+                    className="text-xs font-bold text-gray-400 hover:text-logo-bordeaux transition-colors"
+                  >
+                    Mot de passe oublié ?
+                  </button>
+                </div>
+              )}
+              {authMode === 'register' && (
+                <div className="relative">
+                  <input 
+                    type="password" 
+                    placeholder="Confirmer le mot de passe" 
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    className="w-full px-4 py-4 rounded-xl border border-gray-200 focus:ring-2 focus:ring-logo-bordeaux/20 outline-none text-logo-text font-medium"
+                  />
+                  <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
+                    <Lock size={20} />
+                  </div>
+                </div>
+              )}
+              <Button type="submit" className="w-full py-3 sm:py-4 text-base sm:text-lg font-bold" disabled={isOtpLoading}>
+                {isOtpLoading ? "Chargement..." : authMode === 'login' ? "Se connecter" : "S'inscrire"}
+              </Button>
+              <div className="flex flex-col gap-2 mt-4">
+                <button 
+                  type="button"
+                  onClick={() => setAuthMode(authMode === 'login' ? 'register' : 'login')}
+                  className="text-xs font-bold text-gray-400 uppercase tracking-widest hover:text-logo-bordeaux transition-colors block mx-auto"
+                >
+                  {authMode === 'login' ? "Créer un compte" : "Déjà un compte ? Se connecter"}
+                </button>
+                <button 
+                  type="button"
+                  onClick={() => setAuthMode('landing')}
+                  className="text-xs font-bold text-gray-400 uppercase tracking-widest hover:text-logo-bordeaux transition-colors block mx-auto"
+                >
+                  ← Retour à l'accueil
+                </button>
+              </div>
+            </form>
+          )}
         </motion.div>
       </div>
     );
@@ -672,7 +1136,7 @@ export default function App() {
                   initial={{ scale: 0.8, opacity: 0 }}
                   animate={{ scale: 1, opacity: 1 }}
                   transition={{ type: 'spring', damping: 12 }}
-                  className="w-32 h-32 rounded-3xl bg-white shadow-xl flex items-center justify-center p-4 border border-gray-50 mb-4"
+                  className="w-48 h-28 rounded-3xl bg-white shadow-xl flex items-center justify-center p-3 border border-gray-50 mb-4"
                 >
                   <img src={logo} alt="GA Döner & Grill" className="w-full h-full object-contain" />
                 </motion.div>
@@ -698,40 +1162,164 @@ export default function App() {
               </div>
 
               {/* Menu Items */}
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {menu.filter(item => item.category === activeCategory).map(item => (
-                  <motion.div 
-                    layout
-                    key={item.id}
-                    className="bg-white p-4 rounded-2xl shadow-sm border border-white/10 flex justify-between items-center group text-logo-text"
-                  >
-                    <div className="flex-1">
-                      <h3 className="font-bold text-lg">{item.name}</h3>
-                      {item.description && <p className="text-sm text-gray-500 mt-1 line-clamp-2">{item.description}</p>}
-                      <p className="text-logo-bordeaux font-bold mt-2">{item.price.toFixed(2)}€</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {profile?.role === 'owner' && (
-                        <button 
-                          onClick={() => {
-                            deleteDoc(doc(db, 'menu', item.id))
-                              .then(() => notify(`${item.name} supprimé`))
-                              .catch(e => handleFirestoreError(e, OperationType.DELETE, 'menu'));
-                          }}
-                          className="w-10 h-10 flex items-center justify-center text-red-500 hover:bg-red-50 rounded-full transition-colors"
+              <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+                {menu.filter(item => item.category === activeCategory).map(item => {
+                  const fallbackData = MENU_DATA_MAP[item.name];
+                  const itemDesc = item.description || fallbackData?.description;
+                  const itemImages: string[] = (item.images && item.images.length > 0)
+                    ? item.images
+                    : (fallbackData?.images && fallbackData.images.length > 0)
+                      ? fallbackData.images
+                      : (item.image ? [item.image] : (fallbackData?.image ? [fallbackData.image] : []));
+                  const currentIdx = (cardImageIndices[item.id] || 0) % (itemImages.length || 1);
+                  const activeImage = itemImages[currentIdx] || item.image || fallbackData?.image;
+                  const hasMultiple = itemImages.length > 1;
+
+                  return (
+                    <motion.div 
+                      layout
+                      key={item.id}
+                      className="bg-white rounded-3xl shadow-sm hover:shadow-lg border border-gray-100 flex flex-col justify-between overflow-hidden group text-logo-text transition-all duration-300"
+                    >
+                      {activeImage && (
+                        <div 
+                          className="w-full h-48 sm:h-52 overflow-hidden bg-gray-100 relative cursor-pointer group/img select-none"
+                          onClick={() => setSelectedImageModal({ 
+                            urls: itemImages, 
+                            currentIndex: currentIdx, 
+                            title: item.name, 
+                            description: itemDesc 
+                          })}
                         >
-                          <Trash2 size={20} />
-                        </button>
+                          <img 
+                            src={activeImage} 
+                            alt={item.name} 
+                            className="w-full h-full object-cover group-hover/img:scale-105 transition-transform duration-500"
+                            loading="lazy"
+                          />
+
+                          {/* Photo badges */}
+                          <div className="absolute top-3 right-3 bg-black/60 backdrop-blur-md text-white text-[10px] font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5 shadow-md z-10">
+                            <Sparkles size={11} className="text-yellow-400" />
+                            <span>Photo GA</span>
+                          </div>
+
+                          {hasMultiple && (
+                            <div className="absolute top-3 left-3 bg-black/70 backdrop-blur-md text-white text-[10px] font-black px-2.5 py-1 rounded-full flex items-center gap-1 shadow-md z-10 border border-white/10">
+                              <span>{currentIdx + 1}/{itemImages.length} photos</span>
+                            </div>
+                          )}
+
+                          {/* Navigation arrows if multiple images */}
+                          {hasMultiple && (
+                            <>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCardImageIndices(prev => ({
+                                    ...prev,
+                                    [item.id]: (currentIdx - 1 + itemImages.length) % itemImages.length
+                                  }));
+                                }}
+                                className="absolute left-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/60 hover:bg-black/85 text-white flex items-center justify-center backdrop-blur-sm z-20 shadow-md transition-all active:scale-90"
+                                title="Photo précédente"
+                              >
+                                <ChevronLeft size={16} />
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setCardImageIndices(prev => ({
+                                    ...prev,
+                                    [item.id]: (currentIdx + 1) % itemImages.length
+                                  }));
+                                }}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 w-7 h-7 rounded-full bg-black/60 hover:bg-black/85 text-white flex items-center justify-center backdrop-blur-sm z-20 shadow-md transition-all active:scale-90"
+                                title="Photo suivante"
+                              >
+                                <ChevronRight size={16} />
+                              </button>
+
+                              {/* Dot indicators */}
+                              <div className="absolute bottom-2.5 left-1/2 -translate-x-1/2 flex items-center gap-1.5 z-20 bg-black/50 px-2.5 py-1 rounded-full backdrop-blur-sm">
+                                {itemImages.map((_, dotIdx) => (
+                                  <button
+                                    key={dotIdx}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setCardImageIndices(prev => ({ ...prev, [item.id]: dotIdx }));
+                                    }}
+                                    className={`h-1.5 rounded-full transition-all ${dotIdx === currentIdx ? 'w-4 bg-white' : 'w-1.5 bg-white/50 hover:bg-white/80'}`}
+                                  />
+                                ))}
+                              </div>
+                            </>
+                          )}
+
+                          <div className="absolute inset-0 bg-black/25 opacity-0 group-hover/img:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                            <span className="bg-white/95 text-logo-text text-xs font-bold px-3 py-1.5 rounded-full shadow-xl flex items-center gap-1.5 backdrop-blur-sm">
+                              <Eye size={14} /> Voir en grand
+                            </span>
+                          </div>
+                        </div>
                       )}
-                      <Button 
-                        onClick={() => addToCart(item)}
-                        className="w-10 h-10 p-0 rounded-full shadow-md"
-                      >
-                        <Plus size={20} />
-                      </Button>
-                    </div>
-                  </motion.div>
-                ))}
+                      <div className="p-4 sm:p-5 flex-1 flex flex-col justify-between">
+                        <div 
+                          className="cursor-pointer group/title"
+                          onClick={() => setSelectedImageModal({ 
+                            urls: itemImages, 
+                            currentIndex: currentIdx, 
+                            title: item.name, 
+                            description: itemDesc 
+                          })}
+                        >
+                          <h3 className="font-extrabold text-base sm:text-lg text-logo-text leading-tight group-hover/title:text-logo-bordeaux transition-colors">
+                            {item.name}
+                          </h3>
+                          {itemDesc && (
+                            <p className="text-xs sm:text-sm text-gray-500 mt-2 leading-relaxed font-medium">
+                              {itemDesc}
+                            </p>
+                          )}
+                        </div>
+                        <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-100">
+                          <p className="text-logo-bordeaux font-black text-lg sm:text-xl tabular-nums">
+                            {item.price.toFixed(2)}€
+                          </p>
+                          <div className="flex items-center gap-2">
+                            {profile?.role === 'owner' && (
+                              <button 
+                                onClick={() => {
+                                  deleteDoc(doc(db, 'menu', item.id))
+                                    .then(() => notify(`${item.name} supprimé`))
+                                    .catch(e => handleFirestoreError(e, OperationType.DELETE, 'menu'));
+                                }}
+                                className="w-9 h-9 flex items-center justify-center text-red-500 hover:bg-red-50 rounded-full transition-colors cursor-pointer"
+                                title="Supprimer"
+                              >
+                                <Trash2 size={18} />
+                              </button>
+                            )}
+                            <button 
+                              type="button"
+                              onClick={() => {
+                                if (isKebabItem(item)) {
+                                  setCustomizingKebab(item);
+                                } else {
+                                  addToCart(item);
+                                }
+                              }}
+                              className="w-9 h-9 sm:w-10 sm:h-10 rounded-full shadow-md active:scale-90 bg-logo-cream text-logo-text hover:brightness-105 hover:scale-105 transition-all flex items-center justify-center border border-logo-cream cursor-pointer"
+                              title={isKebabItem(item) ? "Personnaliser sauces, crudités & suppléments" : "Ajouter au panier"}
+                            >
+                              <Plus size={18} strokeWidth={2.5} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </motion.div>
+                  );
+                })}
               </div>
 
               {/* Contact & Social Info */}
@@ -796,40 +1384,87 @@ export default function App() {
                 <div className="flex flex-col h-full overflow-hidden">
                   <div className="flex-1 overflow-y-auto no-scrollbar pr-2 -mx-4 px-4">
                     <div className="space-y-3 sm:space-y-4 mb-6 sm:mb-10">
-                      {cart.map(item => (
-                        <div key={item.menuItemId} className="flex flex-col gap-3 p-4 sm:p-5 bg-gray-50/50 rounded-[1.5rem] border border-gray-100 group transition-all hover:bg-white hover:shadow-lg">
-                          <div className="flex justify-between items-start">
-                            <div className="flex-1 pr-4 sm:pr-6">
-                              <h4 className="font-black text-base sm:text-xl text-logo-text leading-tight group-hover:text-logo-bordeaux transition-colors">{item.name}</h4>
-                              <p className="text-logo-bordeaux font-black text-sm sm:text-lg mt-0.5 sm:mt-1">{(item.price * item.quantity).toFixed(2)}€</p>
+                      {cart.map((item, idx) => {
+                        const itemImage = MENU_DATA_MAP[item.name]?.image;
+                        return (
+                        <div key={idx} className="flex flex-col gap-3 p-4 sm:p-5 bg-gray-50/50 rounded-[1.5rem] border border-gray-100 group transition-all hover:bg-white hover:shadow-lg">
+                          <div className="flex justify-between items-start gap-3">
+                            {itemImage && (
+                              <img 
+                                src={itemImage} 
+                                alt={item.name} 
+                                className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl object-cover shrink-0 border border-gray-200 shadow-sm"
+                              />
+                            )}
+                            <div className="flex-1 pr-2 sm:pr-4">
+                              <h4 className="font-black text-base sm:text-lg text-logo-text leading-tight group-hover:text-logo-bordeaux transition-colors">{item.name}</h4>
+                              <p className="text-logo-bordeaux font-black text-sm sm:text-base mt-0.5 sm:mt-1">{(item.price * item.quantity).toFixed(2)}€</p>
                             </div>
-                            <div className="flex items-center gap-2 sm:gap-4 bg-white p-1 rounded-2xl shadow-sm border border-gray-100">
+                            <div className="flex items-center gap-2 sm:gap-4 bg-white p-1 rounded-2xl shadow-sm border border-gray-100 shrink-0">
                               <button 
-                                onClick={() => updateCartQuantity(item.menuItemId, -1)}
+                                onClick={() => updateCartQuantity(idx, -1)}
                                 className="w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center text-gray-400 hover:text-red-500 transition-colors"
                               >
                                 <Minus size={16} className="sm:w-5 sm:h-5" />
                               </button>
                               <span className="font-black text-sm sm:text-lg w-5 sm:w-6 text-center text-logo-text">{item.quantity}</span>
                               <button 
-                                onClick={() => updateCartQuantity(item.menuItemId, 1)}
+                                onClick={() => updateCartQuantity(idx, 1)}
                                 className="w-8 h-8 sm:w-10 sm:h-10 flex items-center justify-center text-logo-bordeaux hover:scale-110 transition-transform"
                               >
                                 <Plus size={16} className="sm:w-5 sm:h-5" />
                               </button>
                             </div>
                           </div>
+
+                          {/* Kebab Options display in Cart */}
+                          {item.kebabOptions && (
+                            <div className="bg-white p-3 rounded-2xl border border-gray-100 space-y-1.5 text-xs shadow-xs">
+                              {item.kebabOptions.sauces && item.kebabOptions.sauces.length > 0 && (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-gray-500 text-[11px]">Sauces :</span>
+                                  {item.kebabOptions.sauces.map(s => (
+                                    <span key={s} className="bg-amber-100 text-amber-900 font-bold px-2 py-0.5 rounded-md text-[10px]">
+                                      {s}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {item.kebabOptions.crudites && item.kebabOptions.crudites.length > 0 && (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-gray-500 text-[11px]">Crudités :</span>
+                                  {item.kebabOptions.crudites.map(c => (
+                                    <span key={c} className="bg-emerald-100 text-emerald-900 font-bold px-2 py-0.5 rounded-md text-[10px]">
+                                      {c}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                              {item.kebabOptions.supplements && item.kebabOptions.supplements.length > 0 && (
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="font-bold text-logo-bordeaux text-[11px]">Suppléments :</span>
+                                  {item.kebabOptions.supplements.map(supp => (
+                                    <span key={supp.name} className="bg-logo-cream/70 text-logo-text font-black px-2 py-0.5 rounded-md text-[10px]">
+                                      +{supp.name} ({supp.price.toFixed(2)}€)
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                           <div className="relative">
                             <input 
                               type="text" 
                               placeholder="Instructions spéciales..." 
                               value={item.comment}
-                              onChange={(e) => updateCartComment(item.menuItemId, e.target.value)}
+                              onChange={(e) => updateCartComment(idx, e.target.value)}
                               className="w-full bg-white border border-gray-100 rounded-2xl px-4 py-2 sm:py-3 text-[11px] sm:text-sm text-logo-text focus:ring-2 focus:ring-logo-bordeaux/20 outline-none transition-all italic shadow-inner"
                             />
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
 
                     <div className="space-y-6 sm:space-y-8">
@@ -858,52 +1493,15 @@ export default function App() {
                       </div>
 
                       <div>
-                        <h3 className="text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-3 sm:mb-4 px-2">Moyen de paiement</h3>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
-                          <button 
-                            onClick={() => setPaymentMethod('counter')}
-                            className={`flex flex-col items-center justify-center gap-1.5 sm:gap-3 py-3 sm:py-5 px-1.5 sm:px-2 rounded-[1.25rem] border-2 transition-all ${
-                              paymentMethod === 'counter' 
-                                ? 'border-logo-bordeaux bg-logo-bordeaux/5 text-logo-bordeaux shadow-md' 
-                                : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
-                            }`}
-                          >
-                            <Smartphone size={18} className="sm:w-6 sm:h-6" />
-                            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-tight text-center">Comptoir</span>
-                          </button>
-                          <button 
-                            onClick={() => setPaymentMethod('paypal')}
-                            className={`flex flex-col items-center justify-center gap-1.5 sm:gap-3 py-3 sm:py-5 px-1.5 sm:px-2 rounded-[1.25rem] border-2 transition-all ${
-                              paymentMethod === 'paypal' 
-                                ? 'border-[#0070ba] bg-[#0070ba]/5 text-[#0070ba] shadow-md' 
-                                : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
-                            }`}
-                          >
-                            <img src={paypalLogo} alt="PayPal" className="h-2.5 sm:h-4 object-contain" />
-                            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-tight">PayPal</span>
-                          </button>
-                          <button 
-                            onClick={() => setPaymentMethod('wero')}
-                            className={`flex flex-col items-center justify-center gap-1.5 sm:gap-3 py-3 sm:py-5 px-1.5 sm:px-2 rounded-[1.25rem] border-2 transition-all ${
-                              paymentMethod === 'wero' 
-                                ? 'border-blue-600 bg-blue-50 text-blue-600 shadow-md' 
-                                : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
-                            }`}
-                          >
-                            <img src={weroLogo} alt="Wero" className="h-2.5 sm:h-4 object-contain" />
-                            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-tight">Wero</span>
-                          </button>
-                          <button 
-                            onClick={() => setPaymentMethod('revolut')}
-                            className={`flex flex-col items-center justify-center gap-1.5 sm:gap-3 py-3 sm:py-5 px-1.5 sm:px-3 rounded-[1.25rem] border-2 transition-all ${
-                              paymentMethod === 'revolut' 
-                                ? 'border-black bg-black/5 text-black shadow-md' 
-                                : 'border-gray-100 bg-gray-50 text-gray-400 hover:border-gray-200'
-                            }`}
-                          >
-                            <img src={revolutLogo} alt="Revolut" className="h-2.5 sm:h-4 object-contain" />
-                            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-tight">Revolut</span>
-                          </button>
+                        <h3 className="text-[10px] sm:text-xs font-black text-gray-400 uppercase tracking-[0.2em] mb-3 sm:mb-4 px-2">Mode de paiement</h3>
+                        <div className="bg-logo-bordeaux/5 border-2 border-logo-bordeaux rounded-[1.25rem] p-4 flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-xl bg-logo-bordeaux text-white flex items-center justify-center shrink-0 shadow-sm">
+                            <Smartphone size={20} />
+                          </div>
+                          <div>
+                            <span className="text-xs font-black text-logo-text uppercase tracking-tight block">Paiement immédiat au comptoir</span>
+                            <span className="text-[11px] text-gray-500 font-semibold">Règlement en espèces ou carte bancaire lors du retrait au restaurant</span>
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -955,34 +1553,7 @@ export default function App() {
               ) : (
                 <div className="grid gap-6 md:grid-cols-2 text-logo-text">
                   {orders.map(order => (
-                    <div key={order.id} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
-                      <div className="flex justify-between items-start mb-4">
-                        <div>
-                          <p className="text-xs text-gray-400 mb-1">
-                            {order.createdAt?.toDate ? order.createdAt.toDate().toLocaleString() : 'En cours...'}
-                          </p>
-                          <h4 className="font-bold">Commande #{order.id.slice(-4).toUpperCase()}</h4>
-                        </div>
-                        <Badge variant={order.status}>{order.status.toUpperCase()}</Badge>
-                      </div>
-                      <div className="space-y-2 mb-4">
-                        {order.items.map((item, idx) => (
-                          <div key={idx} className="flex justify-between text-sm">
-                            <span className="text-gray-600">{item.quantity}x {item.name}</span>
-                            <span className="font-medium">{(item.price * item.quantity).toFixed(2)}€</span>
-                          </div>
-                        ))}
-                      </div>
-                      <div className="flex justify-between items-center pt-4 border-t border-gray-50">
-                        <div className="flex flex-col gap-1">
-                          <span className="text-[10px] text-gray-400 uppercase font-black tracking-widest">
-                            {order.paymentMethod === 'paypal' ? 'PayPal' : order.paymentMethod === 'wero' ? 'Wero' : order.paymentMethod === 'revolut' ? 'Revolut' : 'Au Comptoir'}
-                          </span>
-                          <span className="font-bold">Total</span>
-                        </div>
-                        <span className="text-logo-bordeaux font-bold">{order.total.toFixed(2)}€</span>
-                      </div>
-                    </div>
+                    <OrderCountdownCard key={order.id} order={order} />
                   ))}
                 </div>
               )}
@@ -1051,59 +1622,16 @@ export default function App() {
                         </div>
                       ) : (
                         orders.map(order => (
-                          <div key={order.id} className="bg-white p-6 rounded-3xl shadow-md border border-gray-100 text-logo-text">
-                            <div className="flex justify-between items-start mb-4">
-                              <div>
-                                <div className="flex items-center gap-2 mb-1">
-                                  <h4 className="font-bold text-lg">{order.customerName}</h4>
-                                  <Badge variant={order.status}>{order.status.toUpperCase()}</Badge>
-                                </div>
-                                <div className="flex gap-2 mb-1">
-                                  <span className="text-[10px] font-bold bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full uppercase">
-                                    {order.pickupTime === 'now' ? 'ASAP' : order.pickupTime === '20min' ? '20 min' : '1h'}
-                                  </span>
-                                  <span className="text-[10px] font-bold bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full uppercase">
-                                    {order.paymentMethod}
-                                  </span>
-                                </div>
-                                <p className="text-xs text-gray-400">
-                                  {order.createdAt?.toDate ? order.createdAt.toDate().toLocaleString() : 'En cours...'}
-                                </p>
-                              </div>
-                              <p className="text-xl font-black text-logo-bordeaux">{order.total.toFixed(2)}€</p>
-                            </div>
-
-                            <div className="bg-gray-50 rounded-2xl p-4 mb-6">
-                              {order.items.map((item, idx) => (
-                                <div key={idx} className="mb-2 last:mb-0">
-                                  <div className="flex justify-between text-sm font-medium">
-                                    <span>{item.quantity}x {item.name}</span>
-                                    <span>{(item.price * item.quantity).toFixed(2)}€</span>
-                                  </div>
-                                  {item.comment && (
-                                    <p className="text-xs text-logo-bordeaux italic mt-1">Note: {item.comment}</p>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-
-                            <div className="flex gap-2">
-                              {order.status === 'pending' && (
-                                <Button onClick={() => updateOrderStatus(order.id, 'validated')} className="flex-1">Valider</Button>
-                              )}
-                              {order.status === 'validated' && (
-                                <Button onClick={() => updateOrderStatus(order.id, 'ready')} className="flex-1 bg-green-500 hover:bg-green-600">Prêt</Button>
-                              )}
-                              {order.status === 'ready' && (
-                                <Button onClick={() => updateOrderStatus(order.id, 'completed')} className="flex-1 bg-blue-500 hover:bg-blue-600">Terminé</Button>
-                              )}
-                              {['pending', 'validated'].includes(order.status) && (
-                                <Button variant="ghost" onClick={() => updateOrderStatus(order.id, 'cancelled')} className="text-red-500 hover:bg-red-50">Annuler</Button>
-                              )}
-                            </div>
-                          </div>
-                        )
-                      ))}
+                          <OrderCountdownCard
+                            key={order.id}
+                            order={order}
+                            isOwner={true}
+                            onExtendPrepTime={extendOrderPrepTime}
+                            onSetExactPrepTime={setExactOrderPrepTime}
+                            onSetStatus={updateOrderStatus}
+                          />
+                        ))
+                      )}
                     </div>
                   </motion.div>
                 ) : (
@@ -1158,6 +1686,16 @@ export default function App() {
                             ))}
                           </select>
                         </div>
+                        <div className="sm:col-span-2">
+                          <label className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1 block">Image (URL ou chemin /menu/... - optionnel)</label>
+                          <input 
+                            type="text" 
+                            value={newItem.image}
+                            onChange={e => setNewItem({...newItem, image: e.target.value})}
+                            className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-logo-bordeaux/20 text-logo-text"
+                            placeholder="ex: /menu/assiette-ga.png"
+                          />
+                        </div>
                         <Button type="submit" className="sm:col-span-2 py-4 bg-logo-bordeaux text-white">Ajouter au menu</Button>
                       </form>
                     </div>
@@ -1170,10 +1708,22 @@ export default function App() {
                         return (
                           <div key={cat} className="space-y-2">
                             <h4 className="text-sm font-bold text-white/80 px-2 mt-6 uppercase tracking-wider">{cat}</h4>
-                            {catItems.map(item => (
-                              <div key={item.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center group text-logo-text">
+                            {catItems.map(item => {
+                              const itemImg = item.image || MENU_DATA_MAP[item.name]?.image;
+                              return (
+                              <div key={item.id} className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 flex justify-between items-center group text-logo-text gap-3">
+                                {itemImg && (
+                                  <img 
+                                    src={itemImg} 
+                                    alt={item.name} 
+                                    className="w-12 h-12 rounded-xl object-cover border border-gray-100 shrink-0" 
+                                  />
+                                )}
                                 <div className="flex-1">
                                   <h5 className="font-black text-lg">{item.name}</h5>
+                                  {item.description && (
+                                    <p className="text-xs text-gray-400 line-clamp-1">{item.description}</p>
+                                  )}
                                   {editingPrices[item.id] !== undefined ? (
                                     <div className="flex items-center gap-2 mt-1">
                                       <input
@@ -1221,7 +1771,8 @@ export default function App() {
                                   <Trash2 size={20} />
                                 </button>
                               </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         );
                       })}
@@ -1332,195 +1883,258 @@ export default function App() {
                 <p className="opacity-90 font-mono">#{lastPlacedOrder.id.slice(-4).toUpperCase()}</p>
               </div>
               
-              <div className="p-8 max-h-[75vh] overflow-y-auto no-scrollbar">
-                {lastPlacedOrder.paymentMethod === 'paypal' && (
-                  <div className="text-center space-y-6">
-                    <div className="flex flex-col items-center">
-                      <div className="w-20 h-20 bg-blue-50 rounded-3xl flex items-center justify-center mb-4">
-                        <img src={paypalLogo} alt="PayPal" className="h-10 object-contain" />
-                      </div>
-                      <h4 className="font-black text-gray-900 mb-1">Paiement PayPal</h4>
-                      <p className="text-xs text-gray-400 mb-6">Paiement sécurisé par compte ou CB</p>
-                    </div>
+              <div className="p-8 text-center">
+                <p className="text-gray-600 mb-8 leading-relaxed">
+                  Votre commande est transmise !<br/>
+                  Vous réglerez directement <span className="font-bold text-logo-bordeaux">au comptoir</span> lors du retrait.
+                </p>
+                <div className="w-48 h-48 bg-gray-50 rounded-3xl mx-auto flex items-center justify-center border border-gray-100 mb-6">
+                  <UtensilsCrossed size={64} className="text-gray-300" />
+                </div>
 
-                    <div className="space-y-4">
-                      <a 
-                        href={`https://www.paypal.com/cgi-bin/webscr?cmd=_xclick&business=ouazzani9633@gmail.com&item_name=Commande%20GA%20Doner%20${lastPlacedOrder.id.slice(-4).toUpperCase()}&amount=${lastPlacedOrder.total.toFixed(2)}&currency_code=EUR`}
-                        target="_blank"
-                        rel="no-referrer"
-                        className="flex items-center justify-center gap-3 w-full py-5 bg-[#0070ba] text-white rounded-2xl font-black uppercase text-sm shadow-xl shadow-blue-500/30 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                      >
-                        Payer {lastPlacedOrder.total.toFixed(2)}€ maintenant
-                        <ExternalLink size={20} />
-                      </a>
-                      
-                      <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 flex items-center justify-between">
-                        <div className="flex flex-col text-left">
-                          <span className="text-[10px] text-gray-400 font-bold uppercase">Destinataire</span>
-                          <span className="text-xs font-bold">ouazzani9633@gmail.com</span>
-                        </div>
-                        <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600">
-                          <ShieldCheck size={16} />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {lastPlacedOrder.paymentMethod === 'wero' && (
-                  <div className="text-center space-y-6">
-                    <div className="flex flex-col items-center">
-                      <div className="w-20 h-20 bg-blue-50 rounded-3xl flex items-center justify-center mb-4 shadow-sm">
-                        <img src={weroLogo} alt="Wero" className="h-10 object-contain" />
-                      </div>
-                      <h4 className="font-black text-gray-900 mb-1">Paiement Wero</h4>
-                      <p className="text-xs text-gray-400 mb-4 font-medium">Scannez le QR Code ou utilisez le numéro</p>
-                    </div>
-
-                    <div className="space-y-4">
-                      {/* QR Code Display */}
-                      <div className="bg-white border-2 border-blue-100 rounded-3xl p-4 shadow-xl overflow-hidden">
-                        <p className="text-[10px] font-black text-blue-600 uppercase tracking-widest mb-3 text-center">Scannez pour payer</p>
-                        <img 
-                          src={weroQR} 
-                          alt="Wero QR Code" 
-                          className="w-full aspect-square object-contain rounded-xl"
-                        />
-                      </div>
-
-                      {/* Number Display with Copy Action */}
-                      <div className="bg-blue-600/5 border-2 border-dashed border-blue-200 p-6 rounded-3xl relative overflow-hidden group">
-                        <div className="absolute top-0 right-0 p-2 bg-blue-100 rounded-bl-xl text-[10px] font-black text-blue-600 uppercase tracking-widest transition-transform group-hover:scale-105">
-                          À copier
-                        </div>
-                        <span className="text-[10px] text-blue-400 font-black uppercase tracking-widest block mb-1 text-left">Numéro du restaurant :</span>
-                        <div className="flex items-center justify-center gap-4">
-                          <span className="text-2xl font-black text-blue-900 tracking-tighter">07 49 01 81 93</span>
-                          <button 
-                            onClick={() => {
-                              navigator.clipboard.writeText('0749018193');
-                              notify("Numéro copié !");
-                            }}
-                            className="p-3 bg-white text-blue-600 rounded-2xl shadow-md border border-blue-100 hover:bg-blue-50 active:scale-95 transition-all"
-                          >
-                            <Copy size={20} />
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Redirection Attempt */}
-                      <div className="grid grid-cols-1 gap-3">
-                        <a 
-                          href="https://wero.eu/" 
-                          target="_blank"
-                          rel="no-referrer"
-                          className="flex items-center justify-center gap-3 w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase text-sm shadow-xl shadow-blue-600/20 hover:scale-[1.02] active:scale-[0.98] transition-all"
-                        >
-                          Ouvrir Wero
-                          <ExternalLink size={18} />
-                        </a>
-                      </div>
-
-                      <div className="text-left bg-gray-50 p-5 rounded-2xl space-y-3">
-                        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest border-b border-gray-200 pb-2">Instructions de paiement</p>
-                        <div className="flex items-start gap-3 text-xs font-bold text-gray-700">
-                          <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px] shrink-0 font-black">1</div>
-                          <span>Copiez le numéro ci-dessus</span>
-                        </div>
-                        <div className="flex items-start gap-3 text-xs font-bold text-gray-700">
-                          <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px] shrink-0 font-black">2</div>
-                          <span>Dans Wero, saisissez <strong>{lastPlacedOrder.total.toFixed(2)}€</strong></span>
-                        </div>
-                        <div className="flex items-start gap-3 text-xs font-bold text-gray-700">
-                          <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-[10px] shrink-0 font-black">3</div>
-                          <span>Validez l'envoi pour confirmer</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {lastPlacedOrder.paymentMethod === 'revolut' && (
-                  <div className="text-center space-y-6">
-                    <div className="flex flex-col items-center">
-                      <div className="w-20 h-20 bg-black rounded-3xl flex items-center justify-center mb-4">
-                        <img src={revolutLogo} alt="Revolut" className="h-10 object-contain rounded-md" />
-                      </div>
-                      <h4 className="font-black text-gray-900 mb-1">Paiement Revolut</h4>
-                      <p className="text-xs text-gray-400 mb-6">Paiement ultra-rapide entre utilisateurs</p>
-                    </div>
-
-                    <div className="space-y-4">
-                      <a 
-                        href={`https://revolut.me/ouazzani9633/${lastPlacedOrder.total.toFixed(2)}`}
-                        target="_blank"
-                        rel="no-referrer"
-                        className="flex items-center justify-center gap-3 w-full py-5 bg-black text-white rounded-2xl font-black uppercase text-sm shadow-xl shadow-gray-500/30 hover:bg-gray-900 transition-all"
-                      >
-                        Payer {lastPlacedOrder.total.toFixed(2)}€ sur Revolut
-                        <ExternalLink size={18} />
-                      </a>
-                      
-                      <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100 flex items-center justify-between">
-                        <div className="flex flex-col text-left">
-                          <span className="text-[10px] text-gray-400 font-bold uppercase">Revolut Username</span>
-                          <span className="text-xs font-bold">@ouazzani9633</span>
-                        </div>
-                        <button 
-                          onClick={() => {
-                            navigator.clipboard.writeText('ouazzani9633');
-                            notify("Username copié !");
-                          }}
-                          className="p-2 text-gray-400 hover:text-black"
-                        >
-                          <Copy size={16} />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
-
-                {lastPlacedOrder.paymentMethod === 'counter' && (
-                  <div className="text-center py-6">
-                    <p className="text-gray-600 mb-8 leading-relaxed">
-                      Votre commande est transmise !<br/>
-                      Vous réglerez directement <span className="font-bold text-logo-bordeaux">au comptoir</span> lors du retrait.
-                    </p>
-                    <div className="w-48 h-48 bg-gray-50 rounded-3xl mx-auto flex items-center justify-center border border-gray-100">
-                      <UtensilsCrossed size={64} className="text-gray-200" />
-                    </div>
-                  </div>
-                )}
-
-                {lastPlacedOrder.paymentMethod !== 'counter' && !isPaymentConfirmed && (
-                  <div className="mt-8 pt-6 border-t border-gray-100">
-                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest text-center mb-4 italic">
-                      Étape finale obligatoire :
-                    </p>
-                    <button 
-                      onClick={confirmPaymentAndNotify}
-                      className="w-full py-5 bg-logo-cream text-logo-text rounded-2xl font-black uppercase text-sm shadow-xl shadow-black/10 hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-3"
-                    >
-                      J'ai payé la commande
-                      <CheckCircle size={20} className="text-logo-bordeaux" />
-                    </button>
-                    <p className="mt-3 text-[10px] text-gray-400 text-center px-4 leading-relaxed">
-                      En cliquant ici, une notification SMS de paiement sera préparée pour le restaurant.
-                    </p>
-                  </div>
-                )}
-
-                {(lastPlacedOrder.paymentMethod === 'counter' || isPaymentConfirmed) && (
-                  <Button 
-                    onClick={() => { setLastPlacedOrder(null); setView('orders'); }}
-                    className="w-full mt-8 py-4 font-black uppercase tracking-widest rounded-2xl shadow-lg"
-                  >
-                    C'est compris !
-                  </Button>
-                )}
+                <Button 
+                  onClick={() => { setLastPlacedOrder(null); setView('orders'); }}
+                  className="w-full py-4 font-black uppercase tracking-widest rounded-2xl shadow-lg"
+                >
+                  C'est compris !
+                </Button>
               </div>
             </motion.div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Image Lightbox Modal */}
+      <AnimatePresence>
+        {selectedImageModal && (
+          <div 
+            className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-4"
+            onClick={() => setSelectedImageModal(null)}
+          >
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="bg-white rounded-3xl overflow-hidden max-w-lg w-full shadow-2xl relative border border-white/20"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <button 
+                onClick={() => setSelectedImageModal(null)}
+                className="absolute top-4 right-4 z-10 w-10 h-10 rounded-full bg-black/60 text-white flex items-center justify-center hover:bg-black/80 transition-colors shadow-lg"
+              >
+                <X size={20} />
+              </button>
+              {(() => {
+                const urls = (selectedImageModal.urls && selectedImageModal.urls.length > 0)
+                  ? selectedImageModal.urls 
+                  : (selectedImageModal.url ? [selectedImageModal.url] : []);
+                const currentModalIdx = selectedImageModal.currentIndex || 0;
+                const currentModalUrl = urls[currentModalIdx] || selectedImageModal.url || '';
+                const hasMultipleModal = urls.length > 1;
+
+                return (
+                  <div>
+                    <div className="w-full h-72 sm:h-80 bg-gray-900 overflow-hidden relative select-none">
+                      <img 
+                        src={currentModalUrl} 
+                        alt={selectedImageModal.title} 
+                        className="w-full h-full object-cover transition-all duration-300"
+                      />
+
+                      {hasMultipleModal && (
+                        <>
+                          <button
+                            onClick={() => setSelectedImageModal({
+                              ...selectedImageModal,
+                              currentIndex: (currentModalIdx - 1 + urls.length) % urls.length
+                            })}
+                            className="absolute left-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/85 text-white flex items-center justify-center backdrop-blur-sm z-10 shadow-lg active:scale-90 transition-all"
+                            title="Photo précédente"
+                          >
+                            <ChevronLeft size={20} />
+                          </button>
+                          <button
+                            onClick={() => setSelectedImageModal({
+                              ...selectedImageModal,
+                              currentIndex: (currentModalIdx + 1) % urls.length
+                            })}
+                            className="absolute right-3 top-1/2 -translate-y-1/2 w-9 h-9 rounded-full bg-black/60 hover:bg-black/85 text-white flex items-center justify-center backdrop-blur-sm z-10 shadow-lg active:scale-90 transition-all"
+                            title="Photo suivante"
+                          >
+                            <ChevronRight size={20} />
+                          </button>
+                        </>
+                      )}
+
+                      {hasMultipleModal && (
+                        <div className="absolute top-4 left-4 bg-black/75 backdrop-blur-md text-white text-xs font-black px-3 py-1 rounded-full border border-white/10 shadow-md">
+                          Photo {currentModalIdx + 1} sur {urls.length}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Thumbnail Switcher in Modal if multiple photos */}
+                    {hasMultipleModal && (
+                      <div className="px-6 pt-3 flex gap-2 overflow-x-auto no-scrollbar">
+                        {urls.map((u, i) => (
+                          <button
+                            key={i}
+                            onClick={() => setSelectedImageModal({ ...selectedImageModal, currentIndex: i })}
+                            className={`w-14 h-14 rounded-xl overflow-hidden border-2 transition-all flex-shrink-0 ${
+                              i === currentModalIdx ? 'border-logo-bordeaux scale-105 shadow-md' : 'border-transparent opacity-60 hover:opacity-100'
+                            }`}
+                          >
+                            <img src={u} alt="" className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="p-6">
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="bg-logo-bordeaux/10 text-logo-bordeaux text-xs font-bold px-2.5 py-0.5 rounded-full flex items-center gap-1">
+                          <Sparkles size={12} /> Photo GA Döner & Grill
+                        </span>
+                        {hasMultipleModal && (
+                          <span className="bg-amber-100 text-amber-800 text-[10px] font-black px-2 py-0.5 rounded-full">
+                            {urls.length} photos disponibles
+                          </span>
+                        )}
+                      </div>
+                      
+                      <div className="flex items-start justify-between gap-4 mb-2">
+                        <h3 className="text-2xl font-black text-logo-text leading-tight">
+                          {selectedImageModal.title}
+                        </h3>
+                        {(() => {
+                          const foundItem = menu.find(m => m.name === selectedImageModal.title);
+                          return foundItem ? (
+                            <span className="text-2xl font-black text-logo-bordeaux tabular-nums shrink-0">
+                              {foundItem.price.toFixed(2)}€
+                            </span>
+                          ) : null;
+                        })()}
+                      </div>
+
+                      {selectedImageModal.description && (
+                        <p className="text-gray-600 text-sm leading-relaxed mb-6 font-medium">
+                          {selectedImageModal.description}
+                        </p>
+                      )}
+                      
+                      <button 
+                        type="button"
+                        onClick={() => {
+                          const foundItem = menu.find(m => m.name === selectedImageModal.title);
+                          if (foundItem) {
+                            if (isKebabItem(foundItem)) {
+                              setSelectedImageModal(null);
+                              setCustomizingKebab(foundItem);
+                            } else {
+                              addToCart(foundItem);
+                              notify(`${foundItem.name} ajouté au panier !`);
+                              setSelectedImageModal(null);
+                            }
+                          } else {
+                            setSelectedImageModal(null);
+                          }
+                        }}
+                        className="w-full py-4 px-6 rounded-2xl bg-logo-cream text-logo-text font-black text-sm uppercase tracking-[0.15em] shadow-xl hover:scale-[1.02] hover:brightness-105 active:scale-95 transition-all duration-300 border-2 border-logo-cream flex items-center justify-center gap-2.5 cursor-pointer"
+                      >
+                        <Plus size={20} strokeWidth={3} className="text-logo-text" />
+                        <span>
+                          {(() => {
+                            const foundItem = menu.find(m => m.name === selectedImageModal.title);
+                            return foundItem && isKebabItem(foundItem) ? 'Personnaliser & Ajouter' : 'Ajouter au panier';
+                          })()}
+                        </span>
+                        {(() => {
+                          const foundItem = menu.find(m => m.name === selectedImageModal.title);
+                          return foundItem ? (
+                            <span className="text-xs font-black opacity-80">({foundItem.price.toFixed(2)}€)</span>
+                          ) : null;
+                        })()}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Kebab Customizer Modal */}
+      <AnimatePresence>
+        {customizingKebab && (
+          <KebabCustomizerModal
+            item={customizingKebab}
+            onClose={() => setCustomizingKebab(null)}
+            onConfirm={({ item, quantity, kebabOptions, totalPrice, comment }) => {
+              addToCart(item, { kebabOptions, totalPrice, comment, quantity });
+              setCustomizingKebab(null);
+            }}
+          />
+        )}
+      </AnimatePresence>
+
+
+
+      {/* Order Ready Alert Modal Popup */}
+      <AnimatePresence>
+        {orderReadyAlertOrder && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full text-center shadow-2xl border-4 border-emerald-400 relative overflow-hidden"
+            >
+              <div className="w-20 h-20 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto mb-4 animate-bounce shadow-md">
+                <BellRing size={40} />
+              </div>
+
+              <span className="bg-emerald-600 text-white text-xs font-black px-3 py-1 rounded-full uppercase tracking-widest inline-block mb-3">
+                Notification Comptoir
+              </span>
+
+              <h3 className="text-2xl sm:text-3xl font-black text-logo-text mb-2 uppercase">
+                Votre Commande est Prête !
+              </h3>
+
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3 mb-4">
+                <span className="text-xs text-gray-500 font-bold block">Numéro de retrait</span>
+                <span className="text-2xl font-black text-logo-bordeaux tracking-wider">
+                  #{orderReadyAlertOrder.id.slice(-4).toUpperCase()}
+                </span>
+              </div>
+
+              <p className="text-gray-600 text-sm mb-6 leading-relaxed">
+                Votre festin GA Döner & Grill est tout chaud et vous attend ! Présentez votre numéro au comptoir pour retirer votre commande.
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setView('orders');
+                    setOrderReadyAlertOrder(null);
+                  }}
+                  className="flex-1 py-3.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-black text-sm uppercase tracking-wider shadow-lg transition-all cursor-pointer"
+                >
+                  Voir ma commande
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOrderReadyAlertOrder(null)}
+                  className="py-3.5 px-4 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-sm transition-all cursor-pointer"
+                >
+                  Fermer
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 
@@ -1531,12 +2145,12 @@ export default function App() {
             initial={{ opacity: 0, y: 50 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 50 }}
-            className="fixed bottom-24 left-6 right-6 z-50"
+            className="fixed bottom-24 left-6 right-6 z-50 pointer-events-none"
           >
-            <div className={`p-4 rounded-2xl shadow-2xl flex items-center gap-3 ${
+            <div className={`p-4 rounded-2xl shadow-2xl flex items-center gap-3 max-w-md mx-auto pointer-events-auto ${
               showNotification.type === 'success' ? 'bg-logo-text text-white' : 'bg-red-500 text-white'
             }`}>
-              {showNotification.type === 'success' ? <CheckCircle size={20} className="text-logo-cream" /> : <X size={20} />}
+              {showNotification.type === 'success' ? <CheckCircle size={20} className="text-logo-cream shrink-0" /> : <X size={20} className="shrink-0" />}
               <p className="font-medium text-sm">{showNotification.message}</p>
             </div>
           </motion.div>
